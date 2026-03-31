@@ -1,0 +1,150 @@
+# Copyright 2026 Thomson Reuters
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+services:
+  postgres:
+    image: postgres:18.3@sha256:69e8582b781cb44fa4557b98ed586fe68361e320d9b12f9707494335634f4f3d
+    container_name: gate-postgres
+    hostname: postgres
+    environment:
+      - POSTGRES_USER=gate
+      - POSTGRES_PASSWORD=gate
+      - POSTGRES_DB=gate
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./.volumes/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "sh -c 'pg_isready -U gate -d gate'"]
+      interval: 30s
+      timeout: 60s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:8.6.1@sha256:1c054d54ecd1597bba52f4304bca5afbc5565ebe614c5b3d7dc5b7f8a0cd768d
+    container_name: gate-redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./.volumes/redis:/data
+
+  redis-insight:
+    image: redis/redisinsight:3.2.0@sha256:55542a762210bb1cd681410282642bac0970f780f39bc134565394a81b1f1fd9
+    container_name: gate-redis-insight
+    hostname: redis-insight
+    ports:
+      - "5540:5540"
+    depends_on:
+      redis:
+        condition: service_started
+
+  localstack:
+    image: localstack/localstack:4.14.0@sha256:3ebc37595918b8accb852f8048fef2aff047d465167edd655528065b07bc364a
+    container_name: gate-localstack
+    hostname: localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=dynamodb
+      - DEBUG=0
+    volumes:
+      - ./.volumes/localstack:/var/lib/localstack
+      - ./localstack-init.sh:/etc/localstack/init/ready.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4566/_localstack/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  adminer:
+    image: adminer:5.4.2@sha256:2fb88b98da9f0ae0157d8fcb73f447a0747b09ee8d2ff8a8e0695b30afed2116
+    container_name: gate-adminer
+    hostname: adminer
+    ports:
+      - "8081:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+      - ADMINER_DESIGN=dracula
+    healthcheck:
+      test: "curl -f localhost:8080 || false"
+      interval: 30s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  migrate:
+    image: gate-dev
+    build:
+      context: ..
+      dockerfile: ./local/Dockerfile.dev
+    container_name: gate-migrate
+    working_dir: /app
+    user: ${HOST_UID}:${HOST_GID}
+    entrypoint: ["sh", "-c", "go run . -c ${CONFIG_FILE:-config.yaml} db migrate up"]
+    environment:
+      - CONFIG_FILE=${CONFIG_FILE:-config.yaml}
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - ../:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+  server:
+    image: gate-dev
+    build:
+      context: ..
+      dockerfile: ./local/Dockerfile.dev
+    container_name: gate-server
+    hostname: server
+    working_dir: /app
+    user: ${HOST_UID}:${HOST_GID}
+    command: -c local/.air.toml
+    ports:
+      - "8080:8080"
+    environment:
+      - HOME=/tmp
+      - CONFIG_FILE=${CONFIG_FILE:-config.yaml}
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - ../:/app
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully

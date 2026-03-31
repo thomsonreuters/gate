@@ -1,0 +1,106 @@
+# Copyright 2026 Thomson Reuters
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Gate configuration example.
+# Copy this file to config.yaml and replace <VALUE> placeholders.
+# Fields with default values are commented out; uncomment to override.
+
+aws_region: <VALUE>
+
+logger:
+  # level: info                       # info | debug | warn | error
+  # format: json                      # json | text
+
+server:
+  # port: 8080
+  # read_timeout: 30s
+  # write_timeout: 30s
+  # shutdown_timeout: 10s
+  # request_timeout: 30s
+  # idle_timeout: 10s
+  # wait_timeout: 10s
+  # tls:                              # optional; omit entire section for plain HTTP
+  #   cert_file_path: <VALUE>
+  #   key_file_path: <VALUE>
+
+oidc:
+  # audience: gate
+
+audit:
+  # backend:                          # sql | dynamodb (empty = console logging only)
+  # sql:
+  #   dsn: <VALUE>
+  # dynamodb:
+  #   table_name: audit_logs          # default: audit_logs
+  #   ttl_days: 90                    # 1-365, default 90
+
+selector:
+  type: memory                        # memory | redis | dynamodb
+  # redis:
+  #   address: <VALUE>
+  #   password: <VALUE>
+  #   db: 0
+  #   tls: false
+  # dynamodb:
+  #   table_name: <VALUE>
+  #   ttl_minutes: 0                  # 0-1440, 0 = no TTL
+
+policy:
+  version: "1.0"
+  trust_policy_path: .github/gate/trust-policy.yaml
+  # default_token_ttl: 900
+  # max_token_ttl: 3600
+  # require_explicit_policy: false
+  # github_api_base_url: https://api.github.com
+  # github_raw_base_url: https://raw.githubusercontent.com
+
+  providers:
+    - issuer: <VALUE>
+      name: <VALUE>
+      required_claims:
+        <KEY>: <VALUE>
+      forbidden_claims:
+        <KEY>: <VALUE>
+      time_restrictions:
+        allowed_days:
+          - Monday
+          - Tuesday
+          - Wednesday
+          - Thursday
+          - Friday
+        allowed_hours:
+          start: <VALUE>
+          end: <VALUE>
+  max_permissions:                    # allowlist: only listed permissions are grantable
+    contents: <VALUE>                 # none | read | write
+    issues: <VALUE>                   # none | read | write
+    pull_requests: <VALUE>            # none | read | write
+    packages: <VALUE>                 # none | read | write
+    metadata: <VALUE>                 # none | read | write
+    # actions: none                   # explicitly deny a permission
+    # Add any GitHub repository-scoped permission here
+
+origin:
+  # enabled: false
+  # header_name: <VALUE>              # required when enabled
+  # header_value: <VALUE>             # required when enabled
+
+fips:
+  # enabled: false
+  # mode: on                          # on | only (only relevant when enabled)
+
+github_apps:
+  - client_id: <VALUE>
+    private_key_path: <VALUE>
+    organization: <VALUE>

@@ -1,0 +1,73 @@
+# Copyright 2026 Thomson Reuters
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+categories:
+  - title: "🚀 Features"
+    labels:
+      - "feature"
+      - "enhancement"
+      - "minor-release"
+  - title: "🐛 Bugfixes"
+    labels:
+      - "fix"
+      - "bugfix"
+      - "bug"
+      - "patch-release"
+  - title: "🧰 Maintenance"
+    labels:
+      - "chore"
+      - "maintenance"
+      - "dependencies"
+      - "patch-release"
+  - title: "Infrastructure"
+    labels:
+      - "infrastructure"
+change-template: "- $TITLE @$AUTHOR (#$NUMBER)"
+change-title-escapes: '\<*_&'
+autolabeler:
+  - label: "maintenance"
+    files:
+      - "*.md"
+    branch:
+      - '/dependabot\/.+/i'
+  - label: "bug"
+    branch:
+      - '/fix\/.+/'
+    title:
+      - "/fix/i"
+  - label: "enhancement"
+    branch:
+      - '/feature\/.+/'
+    body:
+      - '/AB\#[0-9]+/'
+  - label: "infrastructure"
+    files:
+      - "deployments/terraform/**/*"
+version-resolver:
+  major:
+    labels:
+      - "major-release"
+  minor:
+    labels:
+      - "minor-release"
+  patch:
+    labels:
+      - "patch-release"
+  default: patch
+template: |
+  ## Changes since $PREVIOUS_TAG
+
+  $CHANGES

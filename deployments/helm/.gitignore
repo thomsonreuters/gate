@@ -1,0 +1,48 @@
+# -----------------------------------------------------------------------------
+# Chart dependencies
+# -----------------------------------------------------------------------------
+# Downloaded chart dependencies
+charts/
+
+# -----------------------------------------------------------------------------
+# Local values overrides
+# -----------------------------------------------------------------------------
+# Custom/local values files
+**/custom-*.yaml
+**/custom-*.yml
+**/*-custom.yaml
+**/*-custom.yml
+**/values.local.yaml
+**/values.local.yml
+**/values.override.yaml
+**/values.override.yml
+
+# -----------------------------------------------------------------------------
+# Secrets
+# -----------------------------------------------------------------------------
+# Secret values files
+**/*-secrets.yaml
+**/*-secrets.yml
+**/secrets.yaml
+**/secrets.yml
+**/values.secrets.yaml
+**/values.secrets.yml
+
+# Sealed secrets source files (unsealed)
+**/*-secret.yaml
+**/*-secret.yml
+**/secret.yaml
+**/secret.yml
+
+# -----------------------------------------------------------------------------
+# Helm package artifacts
+# -----------------------------------------------------------------------------
+# Packaged charts
+*.tgz
+
+# -----------------------------------------------------------------------------
+# Environment-specific values
+# -----------------------------------------------------------------------------
+# Values with real configuration
+**/values.*.yaml
+**/values.*.yml

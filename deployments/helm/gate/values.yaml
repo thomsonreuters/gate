@@ -1,0 +1,617 @@
+# Copyright 2026 Thomson Reuters
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# =============================================================================
+# Helm Chart Values
+# =============================================================================
+#
+# This chart deploys GATE, a secure token service that exchanges OIDC tokens
+# for short-lived GitHub App installation tokens with fine-grained permissions.
+#
+# Quick start (bare Kubernetes):
+#   1. Create (or update) GitHub Apps secret:
+#        ./scripts/create-kubernetes-secret.sh -f ./github-apps.json
+#        (more options: ./scripts/create-kubernetes-secret.sh -h)
+#   2. Deploy:
+#      helm install gate ./gate
+#
+# For deployment on AWS Elastic Kubernetes Service (EKS), see values-aws-eks.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Name overrides
+# -----------------------------------------------------------------------------
+# Override the chart name used in resource names
+nameOverride: ""
+# Override the full name used in resource names (takes precedence)
+fullnameOverride: ""
+
+# -----------------------------------------------------------------------------
+# Image configuration
+# -----------------------------------------------------------------------------
+image:
+  # Container registry (optional, omit for Docker Hub or local)
+  registry: "ghcr.io/thomsonreuters"
+  # Image repository name
+  repository: gate
+  # Image pull policy
+  # - Always: always pull (recommended for :latest or CI/CD)
+  # - IfNotPresent: pull if not cached (recommended for versioned tags)
+  pullPolicy: IfNotPresent
+  # Image tag (defaults to Chart.appVersion if not set)
+  tag: ""
+  # Image digest (e.g. "sha256:abc123..."). When set, overrides tag.
+  digest: ""
+
+# Pull secrets for private registries
+imagePullSecrets: []
+# - name: my-registry-secret
+
+# -----------------------------------------------------------------------------
+# Service account
+# -----------------------------------------------------------------------------
+serviceAccount:
+  # Create a ServiceAccount for the pods
+  create: true
+  # Automatically mount the ServiceAccount token
+  automount: true
+  # Annotations to add to the ServiceAccount
+  # For AWS IRSA: eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/ROLE
+  annotations: {}
+  # ServiceAccount name (auto-generated if empty and create=true)
+  name: ""
+
+# -----------------------------------------------------------------------------
+# Deployment configuration
+# -----------------------------------------------------------------------------
+# Number of replicas (ignored if autoscaling.enabled=true)
+replicaCount: 2
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels (added to selector labels)
+podLabels: {}
+
+# Pod security context (applied to all containers)
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+
+# -----------------------------------------------------------------------------
+# Resource limits and requests
+# -----------------------------------------------------------------------------
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# -----------------------------------------------------------------------------
+# Autoscaling (HPA)
+# -----------------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# -----------------------------------------------------------------------------
+# Pod Disruption Budget
+# -----------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: false
+  # Minimum available pods during disruption
+  minAvailable: 1
+  # Maximum unavailable pods during disruption
+  # maxUnavailable: 1
+
+# -----------------------------------------------------------------------------
+# Pod scheduling
+# -----------------------------------------------------------------------------
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# -----------------------------------------------------------------------------
+# Service configuration
+# -----------------------------------------------------------------------------
+service:
+  # Service type: ClusterIP, NodePort, LoadBalancer
+  type: ClusterIP
+  # Service port (external)
+  port: 8080
+  # Target port (container port)
+  targetPort: 8080
+  # Service annotations
+  annotations: {}
+
+# -----------------------------------------------------------------------------
+# Ingress configuration
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: false
+  # Ingress class name (e.g., nginx, alb, traefik)
+  className: ""
+  # Ingress annotations
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: gate.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: gate-tls
+    #   hosts:
+    #     - gate.example.com
+
+# -----------------------------------------------------------------------------
+# Network policy
+# -----------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # DNS resolution (kube-dns)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS (GitHub API, DynamoDB, etc.)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+    # Uncomment if using Redis selector store
+    # - to:
+    #     - namespaceSelector: {}
+    #   ports:
+    #     - protocol: TCP
+    #       port: 6379
+    # Uncomment if using PostgreSQL audit backend (audit.backend=sql)
+    # - to:
+    #     - namespaceSelector: {}
+    #   ports:
+    #     - protocol: TCP
+    #       port: 5432
+
+# -----------------------------------------------------------------------------
+# Health Probes
+# -----------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# =============================================================================
+# Application configuration
+# =============================================================================
+config:
+  # ---------------------------------------------------------------------------
+  # Logging
+  # ---------------------------------------------------------------------------
+  # Log level: debug, info, warn, error
+  logLevel: "info"
+  # Log format: json, text
+  logFormat: "json"
+
+  # ---------------------------------------------------------------------------
+  # HTTP server
+  # ---------------------------------------------------------------------------
+  server:
+    # HTTP server port
+    port: 8080
+    # Read timeout for incoming requests
+    readTimeout: "30s"
+    # Write timeout for responses
+    writeTimeout: "30s"
+    # Graceful shutdown timeout
+    shutdownTimeout: "10s"
+    # Per-request timeout
+    requestTimeout: "30s"
+    # Idle connection timeout
+    idleTimeout: "10s"
+    # Wait timeout for graceful connection draining
+    waitTimeout: "10s"
+
+    # TLS configuration (optional, for direct TLS termination at the application)
+    # Most deployments terminate TLS at the load balancer/ingress and do not need this.
+    # When enabled, the chart mounts the TLS secret at /certs.
+    tls:
+      enabled: false
+      # Kubernetes Secret containing tls.crt and tls.key
+      secretName: ""
+      # Paths inside the container (must match the config file)
+      certFilePath: "/certs/tls.crt"
+      keyFilePath: "/certs/tls.key"
+
+  # ---------------------------------------------------------------------------
+  # FIPS 140-3 compliance
+  # ---------------------------------------------------------------------------
+  # Enable FIPS 140-3 mode for FedRAMP and regulated environments.
+  # Requires the container image to be built with GOFIPS140=latest (or a specific
+  # module version). See the root README for build instructions.
+  #
+  # When enabled, the GODEBUG=fips140=<mode> environment variable is set,
+  # which activates FIPS 140-3 mode at runtime:
+  #   - "on": Enables FIPS mode
+  #           - integrity self-checks
+  #           - DRBG for crypto/rand
+  #           - TLS restricted to approved cipher suites
+  #   - "only": Like "on", but non-FIPS algorithms return errors or panic
+  #
+  # IMPORTANT: The binary must be compiled with GOFIPS140 support for this to
+  # take effect. Setting this on a non-FIPS binary has no effect.
+  fips:
+    enabled: false
+    # FIPS mode: "on" or "only"
+    # - "on": FIPS-approved algorithms used, non-FIPS algorithms still available
+    # - "only": non-FIPS algorithms return errors or panic (stricter)
+    #   WARNING: OIDC providers using non-FIPS algorithms (EdDSA, secp256k1) will
+    #   fail token validation in "only" mode. Ensure all providers use FIPS-approved
+    #   algorithms (RS256, ES256, PS256, etc.) before enabling this mode.
+    mode: "on"
+
+  # ---------------------------------------------------------------------------
+  # OIDC configuration
+  # ---------------------------------------------------------------------------
+  oidc:
+    # Expected audience claim in OIDC tokens (REQUIRED)
+    # This should match what your OIDC provider sets in the "aud" claim
+    audience: "gate"
+
+  # ---------------------------------------------------------------------------
+  # GitHub Apps configuration
+  # ---------------------------------------------------------------------------
+  # GitHub Apps credentials source. The service uses these GitHub Apps to
+  # generate installation tokens for requested repositories.
+  githubApps:
+    # Strategy: "kubernetesSecret" (default) or "externalSecret" (requires ESO)
+    strategy: "kubernetesSecret"
+
+    # GitHub Apps metadata (REQUIRED)
+    # Private keys are mounted from the secret at /secrets/github-apps/app-N.pem
+    # where N is the array index (0, 1, 2, ...)
+    apps:
+      - clientId: "Iv1ReplaceWithClientId00"
+        organization: "<GITHUB_ORG_OR_USER>"
+      # - clientId: "Iv1ReplaceWithClientId00"
+      #   organization: "<ANOTHER_ORG>"
+
+    # Kubernetes Secret (manual creation - REQUIRED)
+    # The secret must contain one file per app: app-0.pem, app-1.pem, etc.
+    # matching the index in the apps array above.
+    #
+    # Create secret with:
+    #   kubectl create secret generic github-apps \
+    #     --from-file=app-0.pem=/path/to/private-key-0.pem \
+    #     --from-file=app-1.pem=/path/to/private-key-1.pem \
+    #     -n <namespace>
+    kubernetesSecret:
+      name: "github-apps"
+
+    # ExternalSecret (requires External Secrets Operator)
+    # Remote secret must contain a JSON array matching this structure:
+    #   [
+    #     {
+    #       "client_id": "Iv23...",
+    #       "private_key": "<PEM-ENCODED-PRIVATE-KEY>",
+    #       "organization": "OrgName"
+    #     }
+    #   ]
+    # ESO will extract private_key from each array element to app-N.pem files
+    externalSecret:
+      enabled: false
+      # SecretStore name to reference (only used if externalSecrets.secretStore.create=false)
+      # If creating a new SecretStore, externalSecrets.secretStore.name will be used instead
+      secretStoreName: "aws-secretsmanager"
+      # Remote secret name (e.g., AWS Secrets Manager secret name – REQUIRED)
+      remoteSecretName: ""
+      # Refresh interval
+      refreshInterval: "1h"
+
+  # ---------------------------------------------------------------------------
+  # Origin verification (CloudFront shared secret)
+  # ---------------------------------------------------------------------------
+  # When fronting the service with CloudFront using a publicly accessible ALB,
+  # use a shared secret header to ensure requests only come through CloudFront.
+  # See: deployments/terraform/modules/aws/README.md#origin-verification
+  originVerification:
+    # Enable origin verification header validation
+    enabled: false
+
+    # Header name that CloudFront sends and the application validates
+    headerName: "X-Origin-Verify"
+
+    # Strategy: "kubernetesSecret" or "externalSecret"
+    strategy: "kubernetesSecret"
+
+    # Kubernetes Secret (when strategy=kubernetesSecret)
+    # The secret must exist before deploying this chart
+    kubernetesSecret:
+      name: "cloudfront-origin-verify"
+      key: "value"
+
+    # ExternalSecret (when strategy=externalSecret)
+    # Requires External Secrets Operator
+    externalSecret:
+      # SecretStore name (only used if externalSecrets.secretStore.create=false)
+      secretStoreName: "aws-secretsmanager"
+      # Remote secret name in Secrets Manager (REQUIRED when strategy=externalSecret)
+      remoteSecretName: ""
+      # Refresh interval
+      refreshInterval: "1h"
+
+  # ---------------------------------------------------------------------------
+  # AWS configuration
+  # ---------------------------------------------------------------------------
+  # AWS region for AWS services (DynamoDB audit/selector backends)
+  # Only used when audit.backend=dynamodb or selector.type=dynamodb
+  awsRegion: "us-east-1"
+
+  # ---------------------------------------------------------------------------
+  # Audit backend configuration
+  # ---------------------------------------------------------------------------
+  # Audit logging captures all token requests for compliance and debugging.
+  audit:
+    # Backend type: "" (console logging), "sql" (PostgreSQL), "dynamodb"
+    backend: ""
+
+    # DynamoDB configuration (when backend=dynamodb)
+    dynamodb:
+      # DynamoDB table name (REQUIRED when backend=dynamodb)
+      # IMPORTANT: Provide the actual table name from your infrastructure:
+      #   - From Terraform: terraform output audit_table_name
+      #   - From existing table: Use your DynamoDB table name
+      # Example: "gate-audit" or "my-custom-audit-table"
+      tableName: ""
+      # TTL in days (0 to disable, 1-365)
+      ttlDays: 90
+
+    # SQL (PostgreSQL) configuration (when backend=sql)
+    sql:
+      # PostgreSQL DSN (connection string)
+      # WARNING: Prefer existingSecret for production
+      dsn: ""
+      # Reference to existing secret containing DSN
+      existingSecret:
+        name: ""
+        key: "dsn"
+
+  # ---------------------------------------------------------------------------
+  # Selector store configuration
+  # ---------------------------------------------------------------------------
+  # The selector store tracks GitHub App rate limit state for intelligent
+  # app selection. Use redis or dynamodb for multi-instance deployments.
+  selector:
+    # Store type: memory (single-instance), redis (multi-instance), dynamodb (serverless)
+    type: "memory"
+
+    # Redis configuration (when type=redis)
+    redis:
+      # Redis address (REQUIRED when store=redis)
+      address: ""
+      # Redis password (optional)
+      # WARNING: Prefer existingSecret for production
+      password: ""
+      # Redis database number
+      db: 0
+      # Enable TLS for Redis connection
+      tls: false
+      # Reference to existing secret containing password
+      existingSecret:
+        name: ""
+        key: "password"
+
+    # DynamoDB configuration (when type=dynamodb)
+    dynamodb:
+      # DynamoDB table name (REQUIRED when type=dynamodb)
+      # IMPORTANT: Provide the actual table name from your infrastructure:
+      #   - From Terraform: terraform output selector_table_name
+      #   - From existing table: Use your DynamoDB table name
+      # Example: "gate-selector" or "my-custom-selector-table"
+      tableName: ""
+      # TTL in minutes (0 to disable, recommended: 60-180)
+      # GitHub rate limits reset hourly, so 120 minutes (2 hours) provides a
+      # safety buffer for clock skew and allows viewing recent rate limit history.
+      # Values below 60 minutes are not recommended.
+      ttlMinutes: 120
+
+  # ---------------------------------------------------------------------------
+  # Policy configuration
+  # ---------------------------------------------------------------------------
+  # This section defines the organization-wide security policy for token issuance.
+  policy:
+    # Schema version (must be "1.0")
+    version: "1.0"
+
+    # Path to trust policy file in target repositories
+    # If the path already has a .yaml/.yml extension, it is used as-is;
+    # otherwise both .yaml and .yml are tried.
+    trustPolicyPath: ".github/gate/trust-policy.yaml"
+
+    # Default token TTL in seconds (15 minutes)
+    # Used when trust policy doesn't specify a TTL
+    defaultTokenTTL: 900
+
+    # Maximum token TTL in seconds (1 hour)
+    # Cannot exceed 3600 (GitHub API limit)
+    maxTokenTTL: 3600
+
+    # If true, requests MUST include policy_name field
+    requireExplicitPolicy: false
+
+    # GitHub API URLs (optional, for GitHub Enterprise Server)
+    # Leave empty for github.com
+    githubAPIBaseURL: ""
+    githubRawBaseURL: ""
+
+    # OIDC Identity Providers (REQUIRED)
+    # Define which OIDC issuers are trusted and their validation rules
+    providers:
+      # GitHub Actions OIDC
+      - issuer: "https://token.actions.githubusercontent.com"
+        name: "GitHub Actions"
+        requiredClaims: {}
+        forbiddenClaims: {}
+        # Time restrictions (optional)
+        # timeRestrictions:
+        #   allowedDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+        #   allowedHours:
+        #     start: 9
+        #     end: 17
+
+    # Organization-wide maximum permissions (repository-scoped only)
+    # Repository trust policies CANNOT grant permissions higher than these.
+    # Permissions not listed here can be granted at any level by repository policies.
+    # Use "none" to explicitly forbid a permission entirely.
+    # Permission levels: none (forbidden) < read < write
+    #
+    # Note: Organization-scoped (e.g., members, organization_administration),
+    # user-scoped (e.g., email_addresses), and enterprise-scoped permissions
+    # are automatically denied at the code level regardless of this configuration.
+    maxPermissions:
+      contents: write
+      issues: write
+      pull_requests: write
+      packages: write
+      metadata: read
+      # Example of explicitly forbidden permission:
+      # administration: none
+
+# =============================================================================
+# External Secrets Operator configuration
+# =============================================================================
+# Configuration for External Secrets Operator integration.
+# ESO must be installed in the cluster for this to work.
+externalSecrets:
+  secretStore:
+    # Whether to create a new SecretStore or reference an existing one
+    # - create=true: Chart creates and owns the SecretStore (deleted on uninstall)
+    # - create=false: Chart references a pre-existing SecretStore managed by platform team
+    # Recommended: create=false when the SecretStore is shared across multiple applications
+    create: false
+
+    # SecretStore name (REQUIRED if create=true)
+    name: ""
+
+    # Annotations
+    annotations: {}
+
+    # Provider configuration
+    provider:
+      # Provider type: aws, gcp, azure, vault
+      type: "aws"
+
+      # AWS Secrets Manager configuration (required when type=aws)
+      aws:
+        service: "SecretsManager"
+        region: "us-east-1"
+
+      # Google Cloud Secret Manager configuration (required when type=gcp)
+      gcp:
+        projectID: ""
+        clusterLocation: ""
+        clusterName: ""
+
+      # Azure Key Vault configuration (required when type=azure)
+      azure:
+        vaultUrl: "https://replace-me.vault.azure.net"
+
+      # HashiCorp Vault configuration (required when type=vault)
+      vault:
+        server: "https://replace-me.example.com"
+        path: "secret"
+        version: "v2"
+        mountPath: "kubernetes"
+        role: ""
+
+# =============================================================================
+# Extension Points
+# =============================================================================
+# Extra environment variables
+extraEnv: []
+# - name: CUSTOM_VAR
+#   value: "custom-value"
+
+# Extra environment variables from secrets/configmaps
+extraEnvFrom: []
+# - secretRef:
+#     name: extra-secrets
+
+# Extra volumes
+extraVolumes: []
+# - name: custom-config
+#   configMap:
+#     name: custom-config
+
+# Extra volume mounts
+extraVolumeMounts: []
+# - name: custom-config
+#   mountPath: /config/custom
+#   readOnly: true
+
+# Extra init containers
+initContainers: []
+
+# Extra sidecar containers
+sidecars: []

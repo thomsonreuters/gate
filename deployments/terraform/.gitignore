@@ -1,0 +1,58 @@
+# -----------------------------------------------------------------------------
+# Ccore
+# -----------------------------------------------------------------------------
+# Local .terraform directories
+**/.terraform/
+
+# State files
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform.tfstate.lock.info
+
+# Crash logs
+crash.log
+crash.*.log
+
+# -----------------------------------------------------------------------------
+# Variables and secrets
+# -----------------------------------------------------------------------------
+# tfvars files
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!terraform.tfvars.example
+
+# -----------------------------------------------------------------------------
+# Override files
+# -----------------------------------------------------------------------------
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# -----------------------------------------------------------------------------
+# CLI configuration
+# -----------------------------------------------------------------------------
+.terraformrc
+terraform.rc
+
+# -----------------------------------------------------------------------------
+# Plan files
+# -----------------------------------------------------------------------------
+*.tfplan
+**/plans/
+
+# -----------------------------------------------------------------------------
+# Lock files
+# -----------------------------------------------------------------------------
+# Lock files in reusable modules should not be committed; consumers generate
+# their own when they run terraform init in their environment directories.
+modules/**/.terraform.lock.hcl
+
+# -----------------------------------------------------------------------------
+# Environment-specific ignores
+# -----------------------------------------------------------------------------
+# User environments (create your own here)
+environments/**
+!environments/.gitkeep

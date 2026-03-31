@@ -1,0 +1,92 @@
+# Copyright 2026 Thomson Reuters
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  # General hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-yaml
+        exclude: (^deployments/helm/.*\.ya?ml$|\.tpl\.ya?ml$|invalid.*\.ya?ml$)
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+      - id: check-shebang-scripts-are-executable
+      - id: detect-private-key
+
+  # License header check
+  - repo: https://github.com/google/addlicense
+    rev: 26c3b6c7f829e99495a2786d44b57cad4fae5b89 # v1.2.0
+    hooks:
+      - id: addlicense
+        args:
+          - -c
+          - "Thomson Reuters"
+          - -l
+          - apache
+          - -y
+          - "2026"
+          - -check
+          - -ignore
+          - "**/*.lock.hcl"
+          - -ignore
+          - ".ignored/**"
+
+  # Go hooks
+  - repo: https://github.com/tekwizely/pre-commit-golang
+    rev: f298c082154b2cb239fac06a4f452368e66e66dd # v1.0.0-rc.4
+    hooks:
+      - id: go-mod-tidy
+      - id: go-test-repo-mod
+      - id: go-build-repo-mod
+      - id: golangci-lint-mod
+        args: [--fix]
+
+  # Dockerfile hooks
+  - repo: https://github.com/hadolint/hadolint
+    rev: 57e1618d78fd469a92c1e584e8c9313024656623 # v2.14.0
+    hooks:
+      - id: hadolint
+        entry: ghcr.io/hadolint/hadolint hadolint
+        language: docker_image
+
+  # Terraform hooks
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: d0e12caebb2ab0ee8bf98181c8bfe9702bca103d # v1.105.0
+    hooks:
+      - id: terraform_fmt
+        files: ^deployments/terraform/modules/aws/(cloudfront|ecr|ecs|eks)/
+      - id: terraform_tflint
+        files: ^deployments/terraform/modules/aws/(cloudfront|ecr|ecs|eks)/
+
+  # Helm hooks
+  - repo: local
+    hooks:
+      - id: helm-lint
+        name: Helm Lint
+        entry: bash -c 'helm lint deployments/helm/gate'
+        language: system
+        files: ^deployments/helm/gate/.*\.(yaml|yml|tpl)$
+        pass_filenames: false
+
+      - id: helm-template
+        name: Helm Template
+        entry: bash -c 'helm template deployments/helm/gate > /dev/null'
+        language: system
+        files: ^deployments/helm/gate/.*\.(yaml|yml|tpl)$
+        pass_filenames: false

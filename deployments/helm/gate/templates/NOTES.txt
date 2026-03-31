@@ -1,0 +1,68 @@
+GATE deployed successfully.
+
+{{- $fullname := include "gate.fullname" . -}}
+{{- $namespace := .Release.Namespace -}}
+
+{{- if .Values.ingress.enabled }}
+{{- $host := (index .Values.ingress.hosts 0).host }}
+{{- if $host }}
+Endpoint: http{{ if .Values.ingress.tls }}s{{ end }}://{{ $host }}/api/v1/exchange
+{{- else }}
+Endpoint: Available via Ingress (check: kubectl get ingress -n {{ $namespace }})
+{{- end }}
+{{- else }}
+Service: {{ $fullname }}.{{ $namespace }}:{{ .Values.service.port }}
+{{- end }}
+
+Verify deployment:
+  kubectl rollout status deployment/{{ $fullname }} -n {{ $namespace }}
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -n {{ $namespace }}
+
+Health check:
+  kubectl exec -n {{ $namespace }} deploy/{{ $fullname }} -- wget -qO- http://localhost:{{ .Values.config.server.port }}/health
+
+Configuration:
+  Audit: {{ .Values.config.audit.backend }}
+  Selector: {{ .Values.config.selector.type }}
+  OIDC audience: {{ .Values.config.oidc.audience }}
+{{- if .Values.autoscaling.enabled }}
+  Replicas: {{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }} (HPA)
+{{- else }}
+  Replicas: {{ .Values.replicaCount }}
+{{- end }}
+{{- if eq .Values.config.githubApps.strategy "externalSecret" }}
+  GitHub Apps: ExternalSecret ({{ .Values.config.githubApps.externalSecret.remoteSecretName }})
+{{- else }}
+  GitHub Apps: Secret/{{ .Values.config.githubApps.kubernetesSecret.name }}
+{{- end }}
+
+{{- /* Warnings section - only shown when there are issues */ -}}
+{{- $warnings := list -}}
+
+{{- if and (eq .Values.config.audit.backend "dynamodb") (not (index .Values.serviceAccount.annotations "eks.amazonaws.com/role-arn" | default "")) }}
+{{- $warnings = append $warnings "DynamoDB audit backend requires IRSA. Set serviceAccount.annotations[eks.amazonaws.com/role-arn]" }}
+{{- end }}
+
+{{- if and (eq .Values.config.selector.type "dynamodb") (not (index .Values.serviceAccount.annotations "eks.amazonaws.com/role-arn" | default "")) }}
+{{- $warnings = append $warnings "DynamoDB selector store requires IRSA. Set serviceAccount.annotations[eks.amazonaws.com/role-arn]" }}
+{{- end }}
+
+{{- if and (eq .Values.config.selector.type "redis") (not .Values.config.selector.redis.tls) }}
+{{- $warnings = append $warnings "Redis TLS is disabled. Enable for production: config.selector.redis.tls=true" }}
+{{- end }}
+
+{{- if and (not .Values.podDisruptionBudget.enabled) (gt (int .Values.replicaCount) 1) }}
+{{- $warnings = append $warnings "PodDisruptionBudget is disabled. Enable for production: podDisruptionBudget.enabled=true" }}
+{{- end }}
+
+{{- if and (not .Values.networkPolicy.enabled) }}
+{{- $warnings = append $warnings "NetworkPolicy is disabled. Enable for production: networkPolicy.enabled=true" }}
+{{- end }}
+
+{{- if gt (len $warnings) 0 }}
+
+Warnings:
+{{- range $warnings }}
+  ⚠ {{ . }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,158 @@
+# Copyright 2026 Thomson Reuters
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-config" (include "gate.fullname" .) }}
+  labels:
+    {{- include "gate.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    # Logging configuration
+    logger:
+      level: {{ .Values.config.logLevel | quote }}
+      format: {{ .Values.config.logFormat | quote }}
+
+    # Server configuration
+    server:
+      port: {{ .Values.config.server.port }}
+      read_timeout: {{ .Values.config.server.readTimeout | quote }}
+      write_timeout: {{ .Values.config.server.writeTimeout | quote }}
+      shutdown_timeout: {{ .Values.config.server.shutdownTimeout | quote }}
+      request_timeout: {{ .Values.config.server.requestTimeout | quote }}
+      idle_timeout: {{ .Values.config.server.idleTimeout | quote }}
+      wait_timeout: {{ .Values.config.server.waitTimeout | quote }}
+      {{- if and .Values.config.server.tls .Values.config.server.tls.enabled }}
+      tls:
+        cert_file_path: {{ .Values.config.server.tls.certFilePath | quote }}
+        key_file_path: {{ .Values.config.server.tls.keyFilePath | quote }}
+      {{- end }}
+
+    # OIDC configuration
+    oidc:
+      audience: {{ .Values.config.oidc.audience | quote }}
+
+    # Audit configuration
+    audit:
+      backend: {{ .Values.config.audit.backend | quote }}
+      {{- if eq .Values.config.audit.backend "dynamodb" }}
+      dynamodb:
+        table_name: {{ .Values.config.audit.dynamodb.tableName | quote }}
+        ttl_days: {{ .Values.config.audit.dynamodb.ttlDays }}
+      {{- else if eq .Values.config.audit.backend "sql" }}
+      sql:
+        dsn: ${GATE_AUDIT_SQL_DSN}
+      {{- end }}
+
+    # Selector configuration
+    selector:
+      type: {{ .Values.config.selector.type | quote }}
+      {{- if eq .Values.config.selector.type "redis" }}
+      redis:
+        address: {{ .Values.config.selector.redis.address | quote }}
+        {{- if .Values.config.selector.redis.password }}
+        password: ${GATE_SELECTOR_REDIS_PASSWORD}
+        {{- end }}
+        db: {{ .Values.config.selector.redis.db }}
+        tls: {{ .Values.config.selector.redis.tls }}
+      {{- else if eq .Values.config.selector.type "dynamodb" }}
+      dynamodb:
+        table_name: {{ .Values.config.selector.dynamodb.tableName | quote }}
+        ttl_minutes: {{ .Values.config.selector.dynamodb.ttlMinutes }}
+      {{- end }}
+
+    # Policy configuration
+    policy:
+      version: {{ .Values.config.policy.version | quote }}
+      trust_policy_path: {{ .Values.config.policy.trustPolicyPath | quote }}
+      default_token_ttl: {{ .Values.config.policy.defaultTokenTTL }}
+      max_token_ttl: {{ .Values.config.policy.maxTokenTTL }}
+      require_explicit_policy: {{ .Values.config.policy.requireExplicitPolicy }}
+      {{- if .Values.config.policy.githubAPIBaseURL }}
+      github_api_base_url: {{ .Values.config.policy.githubAPIBaseURL | quote }}
+      {{- end }}
+      {{- if .Values.config.policy.githubRawBaseURL }}
+      github_raw_base_url: {{ .Values.config.policy.githubRawBaseURL | quote }}
+      {{- end }}
+
+      providers:
+      {{- range .Values.config.policy.providers }}
+        - issuer: {{ .issuer | quote }}
+          name: {{ .name | quote }}
+          {{- if .requiredClaims }}
+          required_claims:
+            {{- range $claim, $pattern := .requiredClaims }}
+            {{ $claim }}: {{ $pattern | quote }}
+            {{- end }}
+          {{- else }}
+          required_claims: {}
+          {{- end }}
+          {{- if .forbiddenClaims }}
+          forbidden_claims:
+            {{- range $claim, $pattern := .forbiddenClaims }}
+            {{ $claim }}: {{ $pattern | quote }}
+            {{- end }}
+          {{- else }}
+          forbidden_claims: {}
+          {{- end }}
+          {{- if .timeRestrictions }}
+          time_restrictions:
+            {{- if .timeRestrictions.allowedDays }}
+            allowed_days:
+              {{- range .timeRestrictions.allowedDays }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+            {{- if .timeRestrictions.allowedHours }}
+            allowed_hours:
+              start: {{ .timeRestrictions.allowedHours.start }}
+              end: {{ .timeRestrictions.allowedHours.end }}
+            {{- end }}
+          {{- end }}
+      {{- end }}
+
+      max_permissions:
+      {{- range $permission, $level := .Values.config.policy.maxPermissions }}
+        {{ $permission }}: {{ $level }}
+      {{- end }}
+
+    {{- if .Values.config.originVerification.enabled }}
+    # Origin verification configuration
+    origin:
+      enabled: true
+      header_name: {{ .Values.config.originVerification.headerName | quote }}
+      header_value: ${GATE_ORIGIN_HEADER_VALUE}
+    {{- end }}
+
+    {{- if .Values.config.fips.enabled }}
+    # FIPS configuration
+    fips:
+      enabled: true
+      mode: {{ .Values.config.fips.mode | quote }}
+    {{- end }}
+
+    # GitHub Apps configuration
+    # Private keys mounted from secret at /secrets/github-apps/app-N.pem
+    github_apps:
+    {{- range $index, $app := .Values.config.githubApps.apps }}
+      - client_id: {{ $app.clientId | quote }}
+        private_key_path: {{ printf "/secrets/github-apps/app-%d.pem" $index | quote }}
+        organization: {{ $app.organization | quote }}
+    {{- end }}
+
+    # AWS configuration
+    {{- if or (eq .Values.config.audit.backend "dynamodb") (eq .Values.config.selector.type "dynamodb") }}
+    aws_region: {{ .Values.config.awsRegion | quote }}
+    {{- end }}
