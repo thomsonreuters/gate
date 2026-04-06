@@ -193,6 +193,37 @@ resource "aws_wafv2_web_acl" "main" {
     }
   }
 
+  dynamic "rule" {
+    for_each = var.waf_custom_rule_groups
+    content {
+      name     = "custom-${rule.value.name}"
+      priority = rule.value.priority
+
+      override_action {
+        dynamic "none" {
+          for_each = coalesce(rule.value.override_action, "none") == "none" ? [1] : []
+          content {}
+        }
+        dynamic "count" {
+          for_each = coalesce(rule.value.override_action, "none") == "count" ? [1] : []
+          content {}
+        }
+      }
+
+      statement {
+        rule_group_reference_statement {
+          arn = rule.value.arn
+        }
+      }
+
+      visibility_config {
+        cloudwatch_metrics_enabled = var.waf_cloudwatch_metrics_enabled
+        metric_name                = "${local.resource_prefix}-custom-${rule.value.name}"
+        sampled_requests_enabled   = var.waf_sampled_requests_enabled
+      }
+    }
+  }
+
   visibility_config {
     cloudwatch_metrics_enabled = var.waf_cloudwatch_metrics_enabled
     metric_name                = "${local.resource_prefix}-waf"

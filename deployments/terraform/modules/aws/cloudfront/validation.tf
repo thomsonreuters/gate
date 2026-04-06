@@ -131,12 +131,16 @@ resource "terraform_data" "route53_domain_alias_validation" {
 # =============================================================================
 
 resource "terraform_data" "waf_rule_priority_validation" {
-  count = var.waf_enabled && length(var.waf_managed_rules) > 0 ? 1 : 0
+  count = var.waf_enabled && length(var.waf_managed_rules) + length(var.waf_custom_rule_groups) > 0 ? 1 : 0
 
   lifecycle {
     precondition {
-      condition     = length(var.waf_managed_rules) == length(distinct([for r in var.waf_managed_rules : r.priority]))
-      error_message = "All WAF managed rules must have unique priorities."
+      condition = length(
+        concat([for r in var.waf_managed_rules : r.priority], [for r in var.waf_custom_rule_groups : r.priority])
+        ) == length(distinct(
+          concat([for r in var.waf_managed_rules : r.priority], [for r in var.waf_custom_rule_groups : r.priority])
+      ))
+      error_message = "All WAF rule priorities must be unique across managed rules and custom rule groups."
     }
   }
 }
