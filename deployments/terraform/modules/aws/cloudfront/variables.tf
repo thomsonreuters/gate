@@ -700,6 +700,39 @@ variable "waf_sampled_requests_enabled" {
   default     = true
 }
 
+variable "waf_custom_rule_groups" {
+  description = <<-EOT
+    Custom WAF rule group ARNs to include in the Web ACL.
+
+    Each entry references a pre-existing aws_wafv2_rule_group. The rule group's
+    rules are evaluated inline within the Web ACL at the specified priority.
+
+    name: stable identifier used in the WAF rule name and CloudWatch metric name.
+    override_action: "none" to use rule actions as-is, "count" to only count matches.
+  EOT
+  type = list(object({
+    name            = string
+    arn             = string
+    priority        = number
+    override_action = optional(string, "none")
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for rg in var.waf_custom_rule_groups : rg.priority >= 0 && rg.priority <= 2147483647
+    ])
+    error_message = "All custom rule group priorities must be between 0 and 2147483647."
+  }
+
+  validation {
+    condition = alltrue([
+      for rg in var.waf_custom_rule_groups : contains(["none", "count"], coalesce(rg.override_action, "none"))
+    ])
+    error_message = "Custom rule group override_action must be 'none' or 'count'."
+  }
+}
+
 # ========================================
 # Route53 DNS
 # ========================================
