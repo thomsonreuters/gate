@@ -120,15 +120,14 @@ TERRAFORM INTEGRATION:
     (See Terraform module README for details)
 
 GITHUB APPS JSON FORMAT:
-    {
-      "apps": [
+    [
         {
           "client_id": "Iv1...",
-          "private_key_path": "/path/to/key.pem",
+          "private_key": "<PEM-ENCODED-PRIVATE-KEY>",
           "organization": "my-org"
         }
-      ]
-    }
+    ]
+
 
 EOF
 }

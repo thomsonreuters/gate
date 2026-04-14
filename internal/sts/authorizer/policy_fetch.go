@@ -90,7 +90,7 @@ func (a *Authorizer) fetchPolicyFromGitHub(ctx context.Context, repository, reso
 		}
 	}
 
-	return nil, fmt.Errorf("%w at %s", ErrPolicyFileNotFound, paths[0])
+	return nil, fmt.Errorf("%w at %s", ErrPolicyFileNotFound, strings.Join(paths, ", "))
 }
 
 // extensionVariants returns the paths to try when fetching a trust policy.

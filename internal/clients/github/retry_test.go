@@ -58,7 +58,9 @@ func TestRetryTransport_StatusBehavior(t *testing.T) {
 		{"success_first_attempt", http.StatusOK, 0, http.StatusOK, 1},
 		{"retries_on_5xx", http.StatusBadGateway, 3, http.StatusOK, 3},
 		{"retries_on_429", http.StatusTooManyRequests, 2, http.StatusOK, 2},
-		{"no_retry_on_4xx", http.StatusNotFound, 999, http.StatusNotFound, 1},
+		{"retries_on_400", http.StatusBadRequest, 2, http.StatusOK, 2},
+		{"retries_on_404", http.StatusNotFound, 2, http.StatusOK, 2},
+		{"no_retry_on_other_4xx", http.StatusForbidden, 999, http.StatusForbidden, 1},
 		{"exhausts_max_attempts", http.StatusServiceUnavailable, 999, http.StatusServiceUnavailable, 3},
 	}
 	for _, tt := range tests {
@@ -155,10 +157,10 @@ func TestShouldRetry(t *testing.T) {
 	}{
 		{"200 OK", http.StatusOK, false},
 		{"201 Created", http.StatusCreated, false},
-		{"400 Bad Request", http.StatusBadRequest, false},
+		{"400 Bad Request", http.StatusBadRequest, true},
 		{"401 Unauthorized", http.StatusUnauthorized, false},
 		{"403 Forbidden", http.StatusForbidden, false},
-		{"404 Not Found", http.StatusNotFound, false},
+		{"404 Not Found", http.StatusNotFound, true},
 		{"408 Request Timeout", http.StatusRequestTimeout, true},
 		{"429 Too Many Requests", http.StatusTooManyRequests, true},
 		{"500 Internal Server Error", http.StatusInternalServerError, true},
