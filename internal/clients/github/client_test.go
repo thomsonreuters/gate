@@ -441,7 +441,7 @@ func TestRevokeToken_Success(t *testing.T) {
 	assert.Equal(t, "/installation/token", gotPath)
 }
 
-func TestRevokeToken_Error(t *testing.T) {
+func TestRevokeToken_UnauthorizedTreatedAsSuccess(t *testing.T) {
 	t.Parallel()
 	_, keyPEM := testutil.GenerateRSAKey(t)
 
@@ -453,7 +453,23 @@ func TestRevokeToken_Error(t *testing.T) {
 	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 	require.NoError(t, err)
 
-	err = c.RevokeToken(t.Context(), "ghs_invalid_token")
+	err = c.RevokeToken(t.Context(), "ghs_expired_token")
+	require.NoError(t, err, "401 means token is already invalid, which achieves revocation")
+}
+
+func TestRevokeToken_ServerError(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"Internal Server Error"}`, http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+	require.NoError(t, err)
+
+	err = c.RevokeToken(t.Context(), "ghs_test_token")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "revoking installation token")
 }

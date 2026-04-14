@@ -126,8 +126,12 @@ func (c *Client) RevokeToken(ctx context.Context, token string) error {
 	if err != nil {
 		return err
 	}
-	_, err = gh.Apps.RevokeInstallationToken(ctx)
+	resp, err := gh.Apps.RevokeInstallationToken(ctx)
 	if err != nil {
+		// 401 means the token is already invalid (expired or revoked),
+		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
+			return nil
+		}
 		return fmt.Errorf("revoking installation token: %w", err)
 	}
 	return nil

@@ -102,16 +102,18 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return lastResp, nil
 }
 
-// shouldRetry returns true for 5xx, 429, 408, or nil response (retry on transient failure).
+var retryableStatusCodes = map[int]bool{
+	http.StatusBadRequest:      true,
+	http.StatusNotFound:        true,
+	http.StatusRequestTimeout:  true,
+	http.StatusTooManyRequests: true,
+}
+
 func shouldRetry(resp *http.Response) bool {
 	if resp == nil {
 		return true
 	}
-	if resp.StatusCode >= http.StatusInternalServerError {
-		return true
-	}
-	return resp.StatusCode == http.StatusTooManyRequests ||
-		resp.StatusCode == http.StatusRequestTimeout
+	return resp.StatusCode >= http.StatusInternalServerError || retryableStatusCodes[resp.StatusCode]
 }
 
 // isTransient returns true for timeouts, DNS/connection errors, and connection reset/refused/EOF.
