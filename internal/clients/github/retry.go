@@ -35,16 +35,18 @@ type RetryConfig struct {
 }
 
 // DefaultRetryConfig provides sensible retry defaults for GitHub API calls.
+// Timings follow GitHub Support guidance: new installation tokens may take
+// seconds to replicate, so we use 2s / 10s / 30s retry windows.
 var DefaultRetryConfig = &RetryConfig{
-	MaxAttempts:    3,
-	InitialBackoff: 100 * time.Millisecond,
-	MaxBackoff:     2 * time.Second,
+	MaxAttempts:    4,
+	InitialBackoff: 2 * time.Second,
+	MaxBackoff:     10 * time.Second,
 	Multiplier:     2.0,
 	JitterFraction: 0.1,
 }
 
 // retryTransport wraps an http.RoundTripper with automatic retry on
-// transient failures (5xx, 429, 408, network errors).
+// transient failures (4xx, 5xx, network errors).
 type retryTransport struct {
 	next http.RoundTripper
 	cfg  *RetryConfig
@@ -102,18 +104,15 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return lastResp, nil
 }
 
-var retryableStatusCodes = map[int]bool{
-	http.StatusBadRequest:      true,
-	http.StatusNotFound:        true,
-	http.StatusRequestTimeout:  true,
-	http.StatusTooManyRequests: true,
-}
-
+// shouldRetry returns true for all 4xx/5xx responses. GitHub installation
+// tokens may take seconds to replicate across their infrastructure, causing
+// transient auth and not-found errors on newly minted tokens.
 func shouldRetry(resp *http.Response) bool {
 	if resp == nil {
 		return true
 	}
-	return resp.StatusCode >= http.StatusInternalServerError || retryableStatusCodes[resp.StatusCode]
+
+	return resp.StatusCode >= http.StatusBadRequest
 }
 
 // isTransient returns true for timeouts, DNS/connection errors, and connection reset/refused/EOF.
@@ -143,7 +142,7 @@ func isTransient(err error) bool {
 // calculateBackoff returns exponential backoff with jitter for the given attempt number.
 func (t *retryTransport) calculateBackoff(attempt int) time.Duration {
 	backoff := float64(t.cfg.InitialBackoff)
-	for range attempt {
+	for range attempt - 1 {
 		backoff *= t.cfg.Multiplier
 	}
 	if backoff > float64(t.cfg.MaxBackoff) {
