@@ -59,8 +59,9 @@ func TestRetryTransport_StatusBehavior(t *testing.T) {
 		{"retries_on_5xx", http.StatusBadGateway, 3, http.StatusOK, 3},
 		{"retries_on_429", http.StatusTooManyRequests, 2, http.StatusOK, 2},
 		{"retries_on_400", http.StatusBadRequest, 2, http.StatusOK, 2},
+		{"retries_on_401", http.StatusUnauthorized, 2, http.StatusOK, 2},
+		{"retries_on_403", http.StatusForbidden, 2, http.StatusOK, 2},
 		{"retries_on_404", http.StatusNotFound, 2, http.StatusOK, 2},
-		{"no_retry_on_other_4xx", http.StatusForbidden, 999, http.StatusForbidden, 1},
 		{"exhausts_max_attempts", http.StatusServiceUnavailable, 999, http.StatusServiceUnavailable, 3},
 	}
 	for _, tt := range tests {
@@ -157,9 +158,11 @@ func TestShouldRetry(t *testing.T) {
 	}{
 		{"200 OK", http.StatusOK, false},
 		{"201 Created", http.StatusCreated, false},
+		{"204 No Content", http.StatusNoContent, false},
+		{"301 Moved Permanently", http.StatusMovedPermanently, false},
 		{"400 Bad Request", http.StatusBadRequest, true},
-		{"401 Unauthorized", http.StatusUnauthorized, false},
-		{"403 Forbidden", http.StatusForbidden, false},
+		{"401 Unauthorized", http.StatusUnauthorized, true},
+		{"403 Forbidden", http.StatusForbidden, true},
 		{"404 Not Found", http.StatusNotFound, true},
 		{"408 Request Timeout", http.StatusRequestTimeout, true},
 		{"429 Too Many Requests", http.StatusTooManyRequests, true},
@@ -184,28 +187,29 @@ func TestShouldRetry_NilResponse(t *testing.T) {
 func TestCalculateBackoff(t *testing.T) {
 	t.Parallel()
 	rt := &retryTransport{cfg: &RetryConfig{
-		InitialBackoff: 100 * time.Millisecond,
-		MaxBackoff:     2 * time.Second,
+		InitialBackoff: 1 * time.Second,
+		MaxBackoff:     20 * time.Second,
 		Multiplier:     2.0,
 		JitterFraction: 0.0,
 	}}
 
-	assert.Equal(t, 200*time.Millisecond, rt.calculateBackoff(1))
-	assert.Equal(t, 400*time.Millisecond, rt.calculateBackoff(2))
-	assert.Equal(t, 800*time.Millisecond, rt.calculateBackoff(3))
-	assert.Equal(t, 1600*time.Millisecond, rt.calculateBackoff(4))
-	assert.Equal(t, 2*time.Second, rt.calculateBackoff(5))
+	assert.Equal(t, 1*time.Second, rt.calculateBackoff(1))
+	assert.Equal(t, 2*time.Second, rt.calculateBackoff(2))
+	assert.Equal(t, 4*time.Second, rt.calculateBackoff(3))
+	assert.Equal(t, 8*time.Second, rt.calculateBackoff(4))
+	assert.Equal(t, 16*time.Second, rt.calculateBackoff(5))
 }
 
 func TestCalculateBackoff_MaxCap(t *testing.T) {
 	t.Parallel()
 	rt := &retryTransport{cfg: &RetryConfig{
-		InitialBackoff: 100 * time.Millisecond,
-		MaxBackoff:     150 * time.Millisecond,
+		InitialBackoff: 1 * time.Second,
+		MaxBackoff:     3 * time.Second,
 		Multiplier:     2.0,
 		JitterFraction: 0.0,
 	}}
 
-	assert.Equal(t, 150*time.Millisecond, rt.calculateBackoff(2))
-	assert.Equal(t, 150*time.Millisecond, rt.calculateBackoff(5))
+	assert.Equal(t, 2*time.Second, rt.calculateBackoff(2))
+	assert.Equal(t, 3*time.Second, rt.calculateBackoff(3))
+	assert.Equal(t, 3*time.Second, rt.calculateBackoff(5))
 }
