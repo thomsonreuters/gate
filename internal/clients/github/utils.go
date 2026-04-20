@@ -26,7 +26,7 @@ const (
 )
 
 // parseRepository splits an "owner/repo" string into its components.
-func parseRepository(repository string) (owner, repo string, err error) {
+func parseRepository(repository string) (string, string, error) {
 	parts := strings.Split(repository, repositorySeparator)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("%w: %s", ErrInvalidRepository, repository)

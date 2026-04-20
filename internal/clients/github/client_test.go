@@ -315,8 +315,10 @@ func newTestClient(t *testing.T, opts Options) ClientIface {
 	t.Helper()
 	c, err := New(opts)
 	require.NoError(t, err)
-	c.(*Client).tokenReadyDelay = 0
-	return c
+	client, ok := c.(*Client)
+	require.True(t, ok)
+	client.tokenReadyDelay = 0
+	return client
 }
 
 func TestGetContents_Success(t *testing.T) {
@@ -444,7 +446,8 @@ func TestGetContents_TokenReadyDelay(t *testing.T) {
 
 	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 	require.NoError(t, err)
-	client := c.(*Client)
+	client, ok := c.(*Client)
+	require.True(t, ok)
 	client.tokenReadyDelay = 50 * time.Millisecond
 
 	start := time.Now()
@@ -482,7 +485,8 @@ func TestGetContents_TokenReadyDelay_ContextCancellation(t *testing.T) {
 
 	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 	require.NoError(t, err)
-	client := c.(*Client)
+	client, ok := c.(*Client)
+	require.True(t, ok)
 	client.tokenReadyDelay = 5 * time.Second
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
@@ -493,60 +497,72 @@ func TestGetContents_TokenReadyDelay_ContextCancellation(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
-func TestGetContents_RetriesWithFreshTokenOn403(t *testing.T) {
+func TestGetContents_RetriesWithFreshTokenOnAuthError(t *testing.T) {
 	t.Parallel()
-	_, keyPEM := testutil.GenerateRSAKey(t)
 
-	var tokenCreations atomic.Int32
-	revokedToken := atomic.Value{}
+	tests := []struct {
+		name       string
+		statusCode int
+		errBody    string
+	}{
+		{name: "403", statusCode: http.StatusForbidden, errBody: `{"message":"Resource not accessible by integration"}`},
+		{name: "401", statusCode: http.StatusUnauthorized, errBody: `{"message":"Bad credentials"}`},
+	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, keyPEM := testutil.GenerateRSAKey(t)
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
-			return
-		}
+			var tokenCreations atomic.Int32
+			revokedToken := atomic.Value{}
 
-		if strings.Contains(r.URL.Path, "/access_tokens") {
-			n := tokenCreations.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
-				"token":      fmt.Sprintf("ghs_tok_%d", n),
-				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
-			})
-			return
-		}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/contents/") {
-			auth := r.Header.Get("Authorization")
-			if revoked, ok := revokedToken.Load().(string); ok && strings.Contains(auth, revoked) {
-				http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"type":     "file",
-				"encoding": "base64",
-				"content":  "dmVyc2lvbjogIjEuMCI=",
-			})
-			return
-		}
+				if strings.HasSuffix(r.URL.Path, "/installation") {
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/access_tokens") {
+					n := tokenCreations.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      fmt.Sprintf("ghs_tok_%d", n),
+						"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+					})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/contents/") {
+					auth := r.Header.Get("Authorization")
+					if revoked, ok := revokedToken.Load().(string); ok && strings.Contains(auth, revoked) {
+						http.Error(w, tt.errBody, tt.statusCode)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"type":     "file",
+						"encoding": "base64",
+						"content":  "dmVyc2lvbjogIjEuMCI=",
+					})
+					return
+				}
+				http.Error(w, "not found", http.StatusNotFound)
+			}))
+			t.Cleanup(server.Close)
 
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
-	t.Cleanup(server.Close)
+			c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 
-	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+			_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+			require.NoError(t, err)
+			assert.Equal(t, int32(1), tokenCreations.Load())
 
-	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
-	require.NoError(t, err)
-	assert.Equal(t, int32(1), tokenCreations.Load())
+			revokedToken.Store("ghs_tok_1")
 
-	revokedToken.Store("ghs_tok_1")
-
-	content, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
-	require.NoError(t, err, "should succeed after retrying with fresh token")
-	assert.Equal(t, `version: "1.0"`, string(content))
-	assert.Equal(t, int32(2), tokenCreations.Load(), "should have minted a fresh token after 403")
+			content, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+			require.NoError(t, err, "should succeed after retrying with fresh token")
+			assert.Equal(t, `version: "1.0"`, string(content))
+			assert.Equal(t, int32(2), tokenCreations.Load(), "should have minted a fresh token")
+		})
+	}
 }
 
 func TestGetContents_Permanent403(t *testing.T) {
@@ -562,7 +578,7 @@ func TestGetContents_Permanent403(t *testing.T) {
 		}
 
 		if strings.Contains(r.URL.Path, "/access_tokens") {
-			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"token":      "ghs_tok",
 				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
 			})
@@ -585,62 +601,6 @@ func TestGetContents_Permanent403(t *testing.T) {
 	assert.Contains(t, err.Error(), "403")
 }
 
-func TestGetContents_RetriesWithFreshTokenOn401(t *testing.T) {
-	t.Parallel()
-	_, keyPEM := testutil.GenerateRSAKey(t)
-
-	var tokenCreations atomic.Int32
-	revokedToken := atomic.Value{}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "/access_tokens") {
-			n := tokenCreations.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
-				"token":      fmt.Sprintf("ghs_tok_%d", n),
-				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
-			})
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "/contents/") {
-			auth := r.Header.Get("Authorization")
-			if revoked, ok := revokedToken.Load().(string); ok && strings.Contains(auth, revoked) {
-				http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"type":     "file",
-				"encoding": "base64",
-				"content":  "dmVyc2lvbjogIjEuMCI=",
-			})
-			return
-		}
-
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
-	t.Cleanup(server.Close)
-
-	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
-
-	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
-	require.NoError(t, err)
-	assert.Equal(t, int32(1), tokenCreations.Load())
-
-	revokedToken.Store("ghs_tok_1")
-
-	content, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
-	require.NoError(t, err, "should succeed after retrying with fresh token on 401")
-	assert.Equal(t, `version: "1.0"`, string(content))
-	assert.Equal(t, int32(2), tokenCreations.Load(), "should have minted a fresh token after 401")
-}
-
 func TestGetContents_FreshToken403DoesNotRetry(t *testing.T) {
 	t.Parallel()
 	_, keyPEM := testutil.GenerateRSAKey(t)
@@ -657,7 +617,7 @@ func TestGetContents_FreshToken403DoesNotRetry(t *testing.T) {
 
 		if strings.Contains(r.URL.Path, "/access_tokens") {
 			tokenCreations.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"token":      "ghs_fresh",
 				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
 			})

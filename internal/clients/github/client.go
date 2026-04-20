@@ -232,9 +232,8 @@ func (c *Client) mintToken(ctx context.Context, repository, owner, repo string, 
 	if err != nil {
 		return "", err
 	}
-	return v.(string), nil
+	return v.(string), nil //nolint:errcheck // singleflight guarantees string on nil error
 }
-
 
 // getInstallationID returns the app installation ID for owner/repo, using
 // cache when available. Concurrent misses for the same repo are coalesced.
@@ -274,7 +273,7 @@ func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int
 	if err != nil {
 		return 0, err
 	}
-	return v.(int64), nil
+	return v.(int64), nil //nolint:errcheck // singleflight guarantees int64 on nil error
 }
 
 // createInstallationToken creates a repository-scoped installation

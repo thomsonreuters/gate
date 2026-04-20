@@ -96,7 +96,11 @@ func TestPermissionsKey(t *testing.T) {
 	}{
 		{name: "single", perms: map[string]string{"contents": "read"}, want: "contents=read"},
 		{name: "multiple_sorted", perms: map[string]string{"contents": "read", "metadata": "read"}, want: "contents=read,metadata=read"},
-		{name: "insertion_order_ignored", perms: map[string]string{"pull_requests": "write", "contents": "read"}, want: "contents=read,pull_requests=write"},
+		{
+			name:  "insertion_order_ignored",
+			perms: map[string]string{"pull_requests": "write", "contents": "read"},
+			want:  "contents=read,pull_requests=write",
+		},
 		{name: "empty", perms: map[string]string{}, want: ""},
 		{name: "nil", perms: nil, want: ""},
 	}
