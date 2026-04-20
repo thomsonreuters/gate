@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -60,11 +61,13 @@ type ClientIface interface {
 
 // Client manages GitHub API interactions for token generation.
 type Client struct {
-	clientID      string
-	key           *rsa.PrivateKey
-	baseURL       string
-	httpClient    *http.Client
-	installations *installationCache
+	clientID        string
+	key             *rsa.PrivateKey
+	baseURL         string
+	httpClient      *http.Client
+	installations   *installationCache
+	contentsTokens  *tokenCache
+	tokenReadyDelay time.Duration
 }
 
 // ghClient returns a go-github client authenticated with the given token.
@@ -81,11 +84,10 @@ func (c *Client) ghClient(token string) (*gogithub.Client, error) {
 }
 
 func (c *Client) RequestToken(ctx context.Context, req *TokenRequest) (*TokenResponse, error) {
-	parts := strings.Split(req.Repository, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidRepository, req.Repository)
+	owner, repo, err := parseRepository(req.Repository)
+	if err != nil {
+		return nil, err
 	}
-	owner, repo := parts[0], parts[1]
 
 	id, err := c.getInstallationID(ctx, owner, repo)
 	if err != nil {
@@ -138,49 +140,76 @@ func (c *Client) RevokeToken(ctx context.Context, token string) error {
 }
 
 func (c *Client) GetContents(ctx context.Context, repository string, path string) ([]byte, error) {
-	parts := strings.Split(repository, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidRepository, repository)
-	}
-	owner, repo := parts[0], parts[1]
-
-	id, err := c.getInstallationID(ctx, owner, repo)
-	if err != nil {
-		return nil, fmt.Errorf("getting installation ID: %w", err)
-	}
-
-	token, err := c.createInstallationToken(ctx, id, repo, map[string]string{"contents": "read"})
-	if err != nil {
-		return nil, fmt.Errorf("getting contents token: %w", err)
-	}
-
-	gh, err := c.ghClient(token.Token)
+	owner, repo, err := parseRepository(repository)
 	if err != nil {
 		return nil, err
 	}
 
-	fileContent, _, resp, err := gh.Repositories.GetContents(ctx, owner, repo, path, nil)
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("%w: %s/%s", ErrFileNotFound, repository, path)
+	for attempt := range 2 {
+		tok, cached, err := c.contentsToken(ctx, repository, owner, repo)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("fetching contents: %w", err)
+
+		gh, err := c.ghClient(tok)
+		if err != nil {
+			return nil, err
+		}
+
+		fileContent, _, resp, err := gh.Repositories.GetContents(ctx, owner, repo, path, nil)
+		if err != nil {
+			if attempt == 0 && cached && resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+				c.contentsTokens.delete(repository)
+				continue
+			}
+			if resp != nil && resp.StatusCode == http.StatusNotFound {
+				return nil, fmt.Errorf("%w: %s/%s", ErrFileNotFound, repository, path)
+			}
+			return nil, fmt.Errorf("fetching contents: %w", err)
+		}
+		if fileContent == nil {
+			return nil, fmt.Errorf("%w: %s/%s is a directory", ErrFileNotFound, repository, path)
+		}
+
+		content, err := fileContent.GetContent()
+		if err != nil {
+			return nil, fmt.Errorf("decoding content: %w", err)
+		}
+		return []byte(content), nil
 	}
-	if fileContent == nil {
-		return nil, fmt.Errorf("%w: %s/%s is a directory", ErrFileNotFound, repository, path)
+	return nil, errors.New("unexpected: exhausted GetContents retry")
+}
+
+// contentsToken returns a repo-scoped contents:read token, serving from
+// cache when possible. On a cache miss it mints a new token and waits for
+// GitHub's edge replication before returning. The bool indicates whether
+// the token was served from cache.
+func (c *Client) contentsToken(ctx context.Context, repository, owner, repo string) (string, bool, error) {
+	if tok := c.contentsTokens.get(repository); tok != "" {
+		return tok, true, nil
 	}
 
-	content, err := fileContent.GetContent()
+	id, err := c.getInstallationID(ctx, owner, repo)
 	if err != nil {
-		return nil, fmt.Errorf("decoding content: %w", err)
+		return "", false, fmt.Errorf("getting installation ID: %w", err)
 	}
 
-	return []byte(content), nil
+	token, err := c.createInstallationToken(ctx, id, repo, map[string]string{"contents": "read"})
+	if err != nil {
+		return "", false, fmt.Errorf("getting contents token: %w", err)
+	}
+
+	if err := c.waitTokenReady(ctx); err != nil {
+		return "", false, err
+	}
+
+	c.contentsTokens.set(repository, token.Token, token.ExpiresAt)
+	return token.Token, false, nil
 }
 
 // getInstallationID returns the app installation ID for owner/repo, using cache when available.
 func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int64, error) {
-	key := owner + "/" + repo
+	key := constructRepository(owner, repo)
 
 	if id := c.installations.get(key); id != 0 {
 		return id, nil
@@ -284,6 +313,22 @@ func (c *Client) toInstallationPermissions(m map[string]string) (*gogithub.Insta
 	return p, nil
 }
 
+// waitTokenReady pauses for tokenReadyDelay to allow a newly minted
+// installation token to replicate across GitHub's edge infrastructure.
+func (c *Client) waitTokenReady(ctx context.Context) error {
+	if c.tokenReadyDelay <= 0 {
+		return nil
+	}
+	t := time.NewTimer(c.tokenReadyDelay)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // New is the constructor for the GitHub client. It is a package-level
 // variable so tests can replace it.
 var New = newClient
@@ -308,10 +353,12 @@ func newClient(opts Options) (ClientIface, error) {
 	}
 
 	return &Client{
-		clientID:      opts.ClientID,
-		key:           key,
-		baseURL:       strings.TrimRight(opts.BaseURL, "/"),
-		httpClient:    &http.Client{Timeout: opts.Timeout, Transport: transport},
-		installations: newInstallationCache(),
+		clientID:        opts.ClientID,
+		key:             key,
+		baseURL:         strings.TrimRight(opts.BaseURL, "/"),
+		httpClient:      &http.Client{Timeout: opts.Timeout, Transport: transport},
+		installations:   newInstallationCache(),
+		contentsTokens:  newTokenCache(),
+		tokenReadyDelay: DefaultTokenReadyDelay,
 	}, nil
 }

@@ -21,6 +21,13 @@ const (
 	DefaultBaseURL = "https://api.github.com"
 	// DefaultTimeout is the HTTP client timeout for GitHub API requests.
 	DefaultTimeout = 30 * time.Second
+	// DefaultTokenReadyDelay is the pause between minting an installation
+	// token and first using it. GitHub's edge infrastructure needs time to
+	// replicate new tokens; without a delay, the first request frequently
+	// receives a transient 403 "Resource not accessible by integration".
+	// Per GitHub Support guidance, 2-3 seconds prevents the majority of
+	// replication-lag errors.
+	DefaultTokenReadyDelay = 2 * time.Second
 )
 
 // Options configures the GitHub App client.
