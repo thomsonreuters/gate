@@ -585,6 +585,119 @@ func TestGetContents_Permanent403(t *testing.T) {
 	assert.Contains(t, err.Error(), "403")
 }
 
+func TestGetContents_RetriesWithFreshTokenOn401(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var tokenCreations atomic.Int32
+	revokedToken := atomic.Value{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			n := tokenCreations.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+				"token":      fmt.Sprintf("ghs_tok_%d", n),
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/contents/") {
+			auth := r.Header.Get("Authorization")
+			if revoked, ok := revokedToken.Load().(string); ok && strings.Contains(auth, revoked) {
+				http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":     "file",
+				"encoding": "base64",
+				"content":  "dmVyc2lvbjogIjEuMCI=",
+			})
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), tokenCreations.Load())
+
+	revokedToken.Store("ghs_tok_1")
+
+	content, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+	require.NoError(t, err, "should succeed after retrying with fresh token on 401")
+	assert.Equal(t, `version: "1.0"`, string(content))
+	assert.Equal(t, int32(2), tokenCreations.Load(), "should have minted a fresh token after 401")
+}
+
+func TestGetContents_FreshToken403DoesNotRetry(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var tokenCreations atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			tokenCreations.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+				"token":      "ghs_fresh",
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/contents/") {
+			http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "403")
+	assert.Equal(t, int32(1), tokenCreations.Load(), "fresh token 403 should not trigger a second mint")
+}
+
+func TestInstallationCache_UpdateExistingAtCapacity(t *testing.T) {
+	t.Parallel()
+	c := newInstallationCache()
+
+	for i := range maxInstallationCacheEntries {
+		c.set(fmt.Sprintf("org%d/repo%d", i, i), int64(i+1000))
+		if i%100 == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	assert.Len(t, c.entries, maxInstallationCacheEntries)
+
+	c.set("org0/repo0", 9999)
+	assert.Len(t, c.entries, maxInstallationCacheEntries, "updating existing key at capacity must not evict")
+	assert.Equal(t, int64(9999), c.get("org0/repo0"))
+}
+
 func TestGetContents_InvalidRepository(t *testing.T) {
 	t.Parallel()
 	_, keyPEM := testutil.GenerateRSAKey(t)

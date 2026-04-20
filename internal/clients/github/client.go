@@ -33,6 +33,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	gogithub "github.com/google/go-github/v83/github"
 	"github.com/thomsonreuters/gate/internal/utils"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -66,7 +67,9 @@ type Client struct {
 	baseURL         string
 	httpClient      *http.Client
 	installations   *installationCache
+	installationSF  singleflight.Group
 	contentsTokens  *tokenCache
+	tokenMintSF     singleflight.Group
 	tokenReadyDelay time.Duration
 }
 
@@ -181,33 +184,60 @@ func (c *Client) GetContents(ctx context.Context, repository string, path string
 }
 
 // contentsToken returns a repo-scoped contents:read token, serving from
-// cache when possible. On a cache miss it mints a new token and waits for
-// GitHub's edge replication before returning. The bool indicates whether
-// the token was served from cache.
+// cache when possible. On a cache miss, concurrent callers for the same
+// repository are coalesced so only one mint + replication delay occurs.
+// The bool indicates whether the token was served from cache.
 func (c *Client) contentsToken(ctx context.Context, repository, owner, repo string) (string, bool, error) {
 	if tok := c.contentsTokens.get(repository); tok != "" {
 		return tok, true, nil
 	}
 
-	id, err := c.getInstallationID(ctx, owner, repo)
+	perms := map[string]string{"contents": "read"}
+	tok, err := c.mintToken(ctx, repository, owner, repo, perms, c.contentsTokens)
 	if err != nil {
-		return "", false, fmt.Errorf("getting installation ID: %w", err)
-	}
-
-	token, err := c.createInstallationToken(ctx, id, repo, map[string]string{"contents": "read"})
-	if err != nil {
-		return "", false, fmt.Errorf("getting contents token: %w", err)
-	}
-
-	if err := c.waitTokenReady(ctx); err != nil {
 		return "", false, err
 	}
-
-	c.contentsTokens.set(repository, token.Token, token.ExpiresAt)
-	return token.Token, false, nil
+	return tok, false, nil
 }
 
-// getInstallationID returns the app installation ID for owner/repo, using cache when available.
+// mintToken creates a new installation token with the given permissions,
+// waits for edge replication, and stores the result in cache. Concurrent
+// calls for the same repository+permissions share a single in-flight
+// mint via singleflight.
+func (c *Client) mintToken(ctx context.Context, repository, owner, repo string, perms map[string]string, cache *tokenCache) (string, error) {
+	sfKey := repository + "|" + permissionsKey(perms)
+
+	v, err, _ := c.tokenMintSF.Do(sfKey, func() (any, error) {
+		if tok := cache.get(repository); tok != "" {
+			return tok, nil
+		}
+
+		id, err := c.getInstallationID(ctx, owner, repo)
+		if err != nil {
+			return nil, fmt.Errorf("getting installation ID: %w", err)
+		}
+
+		token, err := c.createInstallationToken(ctx, id, repo, perms)
+		if err != nil {
+			return nil, fmt.Errorf("minting installation token: %w", err)
+		}
+
+		if err := c.waitTokenReady(ctx); err != nil {
+			return nil, err
+		}
+
+		cache.set(repository, token.Token, token.ExpiresAt)
+		return token.Token, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil
+}
+
+
+// getInstallationID returns the app installation ID for owner/repo, using
+// cache when available. Concurrent misses for the same repo are coalesced.
 func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int64, error) {
 	key := constructRepository(owner, repo)
 
@@ -215,26 +245,36 @@ func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int
 		return id, nil
 	}
 
-	appJWT, err := c.generateAppJWT()
-	if err != nil {
-		return 0, fmt.Errorf("generating app JWT: %w", err)
-	}
+	v, err, _ := c.installationSF.Do(key, func() (any, error) {
+		if id := c.installations.get(key); id != 0 {
+			return id, nil
+		}
 
-	gh, err := c.ghClient(appJWT)
+		appJWT, err := c.generateAppJWT()
+		if err != nil {
+			return nil, fmt.Errorf("generating app JWT: %w", err)
+		}
+
+		gh, err := c.ghClient(appJWT)
+		if err != nil {
+			return nil, err
+		}
+
+		installation, resp, err := gh.Apps.FindRepositoryInstallation(ctx, owner, repo)
+		if err != nil {
+			if resp != nil && resp.StatusCode == http.StatusNotFound {
+				return nil, fmt.Errorf("%w: %s/%s", ErrRepositoryNotFound, owner, repo)
+			}
+			return nil, fmt.Errorf("fetching installation ID: %w", err)
+		}
+
+		c.installations.set(key, installation.GetID())
+		return installation.GetID(), nil
+	})
 	if err != nil {
 		return 0, err
 	}
-
-	installation, resp, err := gh.Apps.FindRepositoryInstallation(ctx, owner, repo)
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return 0, fmt.Errorf("%w: %s/%s", ErrRepositoryNotFound, owner, repo)
-		}
-		return 0, fmt.Errorf("fetching installation ID: %w", err)
-	}
-
-	c.installations.set(key, installation.GetID())
-	return installation.GetID(), nil
+	return v.(int64), nil
 }
 
 // createInstallationToken creates a repository-scoped installation
@@ -325,7 +365,7 @@ func (c *Client) waitTokenReady(ctx context.Context) error {
 	case <-t.C:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		return fmt.Errorf("waiting for token replication: %w", ctx.Err())
 	}
 }
 

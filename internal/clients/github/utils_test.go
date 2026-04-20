@@ -85,3 +85,35 @@ func TestParseAndConstructRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, input, constructRepository(owner, repo))
 }
+
+func TestPermissionsKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		perms map[string]string
+		want  string
+	}{
+		{name: "single", perms: map[string]string{"contents": "read"}, want: "contents=read"},
+		{name: "multiple_sorted", perms: map[string]string{"contents": "read", "metadata": "read"}, want: "contents=read,metadata=read"},
+		{name: "insertion_order_ignored", perms: map[string]string{"pull_requests": "write", "contents": "read"}, want: "contents=read,pull_requests=write"},
+		{name: "empty", perms: map[string]string{}, want: ""},
+		{name: "nil", perms: nil, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, permissionsKey(tt.perms))
+		})
+	}
+}
+
+func TestPermissionsKey_Stable(t *testing.T) {
+	t.Parallel()
+	perms := map[string]string{"z": "1", "a": "2", "m": "3"}
+	first := permissionsKey(perms)
+	for range 100 {
+		assert.Equal(t, first, permissionsKey(perms))
+	}
+}

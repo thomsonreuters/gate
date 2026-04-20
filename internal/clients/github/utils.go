@@ -16,6 +16,7 @@ package github
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -28,7 +29,7 @@ const (
 func parseRepository(repository string) (owner, repo string, err error) {
 	parts := strings.Split(repository, repositorySeparator)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", ErrInvalidRepository
+		return "", "", fmt.Errorf("%w: %s", ErrInvalidRepository, repository)
 	}
 	return parts[0], parts[1], nil
 }
@@ -36,4 +37,24 @@ func parseRepository(repository string) (owner, repo string, err error) {
 // constructRepository joins owner and repo into the canonical "owner/repo" form.
 func constructRepository(owner, repo string) string {
 	return fmt.Sprintf(repositoryFormat, owner, repo)
+}
+
+// permissionsKey returns a stable string for a permissions map, suitable
+// for use as part of a singleflight or cache key.
+func permissionsKey(perms map[string]string) string {
+	keys := make([]string, 0, len(perms))
+	for k := range perms {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(perms[k])
+	}
+	return b.String()
 }
