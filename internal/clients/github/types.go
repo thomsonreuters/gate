@@ -44,8 +44,8 @@ const (
 	installationCacheTTL = 24 * time.Hour
 	// maxTokenCacheEntries caps the in-memory contents-token cache size.
 	maxTokenCacheEntries = 1000
-	// tokenCacheExpiryBuffer is subtracted from the token's ExpiresAt
-	// to avoid serving a token that is about to expire mid-request.
+	// tokenCacheExpiryBuffer prevents serving a token that is about to expire:
+	// a token is not served if the current time is within this buffer of its ExpiresAt.
 	tokenCacheExpiryBuffer = 5 * time.Minute
 )
 

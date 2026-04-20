@@ -20,14 +20,9 @@ import (
 	"strings"
 )
 
-const (
-	repositoryFormat    = "%s/%s"
-	repositorySeparator = "/"
-)
-
 // parseRepository splits an "owner/repo" string into its components.
 func parseRepository(repository string) (string, string, error) {
-	parts := strings.Split(repository, repositorySeparator)
+	parts := strings.Split(repository, "/")
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", fmt.Errorf("%w: %s", ErrInvalidRepository, repository)
 	}
@@ -36,7 +31,7 @@ func parseRepository(repository string) (string, string, error) {
 
 // constructRepository joins owner and repo into the canonical "owner/repo" form.
 func constructRepository(owner, repo string) string {
-	return fmt.Sprintf(repositoryFormat, owner, repo)
+	return owner + "/" + repo
 }
 
 // permissionsKey returns a stable string for a permissions map, suitable

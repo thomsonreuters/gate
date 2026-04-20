@@ -148,6 +148,7 @@ func (c *Client) GetContents(ctx context.Context, repository string, path string
 		return nil, err
 	}
 
+	// Retry once: if a cached token yields 401/403, evict it and mint a fresh one.
 	for attempt := range 2 {
 		tok, cached, err := c.contentsToken(ctx, repository, owner, repo)
 		if err != nil {

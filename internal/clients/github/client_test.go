@@ -565,80 +565,72 @@ func TestGetContents_RetriesWithFreshTokenOnAuthError(t *testing.T) {
 	}
 }
 
-func TestGetContents_Permanent403(t *testing.T) {
+func TestGetContents_Persistent403(t *testing.T) {
 	t.Parallel()
-	_, keyPEM := testutil.GenerateRSAKey(t)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	tests := []struct {
+		name            string
+		preSeed         bool
+		wantMints       int32
+		wantContentHits int32
+	}{
+		// Pre-seeded: cached token → 403 (retried by retryTransport 4×) → evict → mint fresh → 403 (4×)
+		{name: "cached_token_retries_then_fails", preSeed: true, wantMints: 1, wantContentHits: 8},
+		// No cache: mint fresh → 403 (retried by retryTransport 4×) → no second attempt
+		{name: "fresh_token_does_not_retry", preSeed: false, wantMints: 1, wantContentHits: 4},
+	}
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
-			return
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, keyPEM := testutil.GenerateRSAKey(t)
 
-		if strings.Contains(r.URL.Path, "/access_tokens") {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"token":      "ghs_tok",
-				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
-			})
-			return
-		}
+			var tokenCreations atomic.Int32
+			var contentHits atomic.Int32
 
-		if strings.Contains(r.URL.Path, "/contents/") {
-			http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
-			return
-		}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
 
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
-	t.Cleanup(server.Close)
+				if strings.HasSuffix(r.URL.Path, "/installation") {
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/access_tokens") {
+					tokenCreations.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      fmt.Sprintf("ghs_tok_%d", tokenCreations.Load()),
+						"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+					})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/contents/") {
+					contentHits.Add(1)
+					http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
+					return
+				}
+				http.Error(w, "not found", http.StatusNotFound)
+			}))
+			t.Cleanup(server.Close)
 
-	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+			c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 
-	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
-	require.Error(t, err, "permanent 403 should fail after retry exhausted")
-	assert.Contains(t, err.Error(), "403")
-}
+			if tt.preSeed {
+				client, ok := c.(*Client)
+				require.True(t, ok)
+				client.contentsTokens.set(
+					"example-org/example-repo",
+					"ghs_stale",
+					time.Now().Add(time.Hour),
+				)
+			}
 
-func TestGetContents_FreshToken403DoesNotRetry(t *testing.T) {
-	t.Parallel()
-	_, keyPEM := testutil.GenerateRSAKey(t)
-
-	var tokenCreations atomic.Int32
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "/access_tokens") {
-			tokenCreations.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"token":      "ghs_fresh",
-				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
-			})
-			return
-		}
-
-		if strings.Contains(r.URL.Path, "/contents/") {
-			http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
-			return
-		}
-
-		http.Error(w, "not found", http.StatusNotFound)
-	}))
-	t.Cleanup(server.Close)
-
-	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
-
-	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "403")
-	assert.Equal(t, int32(1), tokenCreations.Load(), "fresh token 403 should not trigger a second mint")
+			_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "403")
+			assert.Equal(t, tt.wantMints, tokenCreations.Load())
+			assert.Equal(t, tt.wantContentHits, contentHits.Load())
+		})
+	}
 }
 
 func TestInstallationCache_UpdateExistingAtCapacity(t *testing.T) {
@@ -956,6 +948,20 @@ func TestTokenCache_Eviction(t *testing.T) {
 	assert.Len(t, c.entries, maxTokenCacheEntries)
 	assert.Equal(t, "tok_new", c.get("neworg/newrepo"))
 	assert.Empty(t, c.get("org0/repo0"), "entry with earliest expiry should have been evicted")
+}
+
+func TestTokenCache_UpdateExistingAtCapacity(t *testing.T) {
+	t.Parallel()
+	c := newTokenCache()
+
+	for i := range maxTokenCacheEntries {
+		c.set(fmt.Sprintf("org%d/repo%d", i, i), fmt.Sprintf("tok_%d", i), time.Now().Add(time.Hour))
+	}
+	assert.Len(t, c.entries, maxTokenCacheEntries)
+
+	c.set("org0/repo0", "tok_updated", time.Now().Add(2*time.Hour))
+	assert.Len(t, c.entries, maxTokenCacheEntries, "updating existing key at capacity must not evict")
+	assert.Equal(t, "tok_updated", c.get("org0/repo0"))
 }
 
 func TestGetContents_CachedToken(t *testing.T) {
