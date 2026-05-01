@@ -663,8 +663,7 @@ func TestGetContents_RepoOutsideInstallationScope(t *testing.T) {
 	client.installations.set("example-org", 12345)
 
 	_, err := c.GetContents(t.Context(), "example-org/excluded-repo", ".github/trust-policy.yaml")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrRepositoryNotFound)
+	require.ErrorIs(t, err, ErrRepositoryNotFound)
 	assert.Equal(t, int32(0), installationLookups.Load(), "warm installation cache should skip lookup")
 }
 
