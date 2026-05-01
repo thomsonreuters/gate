@@ -236,10 +236,11 @@ func (c *Client) mintToken(ctx context.Context, repository, owner, repo string, 
 	return v.(string), nil //nolint:errcheck // singleflight guarantees string on nil error
 }
 
-// getInstallationID returns the app installation ID for owner/repo, using
-// cache when available. Concurrent misses for the same repo are coalesced.
+// getInstallationID returns the app installation ID for owner. Installations
+// are per-account, so cache and singleflight are keyed by owner; repo is
+// only used for the API lookup on cache miss.
 func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int64, error) {
-	key := constructRepository(owner, repo)
+	key := owner
 
 	if id := c.installations.get(key); id != 0 {
 		return id, nil
@@ -304,8 +305,13 @@ func (c *Client) createInstallationToken(ctx context.Context, id int64, reposito
 		Repositories: []string{repository},
 	}
 
-	token, _, err := gh.Apps.CreateInstallationToken(ctx, id, opts)
+	token, resp, err := gh.Apps.CreateInstallationToken(ctx, id, opts)
 	if err != nil {
+		// 404 (no installation) and 422 (repo outside installation scope)
+		// match getInstallationID's ErrRepositoryNotFound contract.
+		if resp != nil && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity) {
+			return nil, fmt.Errorf("%w: %s", ErrRepositoryNotFound, repository)
+		}
 		return nil, fmt.Errorf("creating installation token: %w", err)
 	}
 

@@ -633,21 +633,56 @@ func TestGetContents_Persistent403(t *testing.T) {
 	}
 }
 
+func TestGetContents_RepoOutsideInstallationScope(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var installationLookups atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.HasSuffix(r.URL.Path, "/installation") {
+			installationLookups.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			http.Error(w,
+				`{"message":"There is at least one repository that does not exist or is not accessible to the parent installation."}`,
+				http.StatusUnprocessableEntity)
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+	client, ok := c.(*Client)
+	require.True(t, ok)
+	client.installations.set("example-org", 12345)
+
+	_, err := c.GetContents(t.Context(), "example-org/excluded-repo", ".github/trust-policy.yaml")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRepositoryNotFound)
+	assert.Equal(t, int32(0), installationLookups.Load(), "warm installation cache should skip lookup")
+}
+
 func TestInstallationCache_UpdateExistingAtCapacity(t *testing.T) {
 	t.Parallel()
 	c := newInstallationCache()
 
 	for i := range maxInstallationCacheEntries {
-		c.set(fmt.Sprintf("org%d/repo%d", i, i), int64(i+1000))
+		c.set(fmt.Sprintf("org%d", i), int64(i+1000))
 		if i%100 == 0 {
 			time.Sleep(time.Millisecond)
 		}
 	}
 	assert.Len(t, c.entries, maxInstallationCacheEntries)
 
-	c.set("org0/repo0", 9999)
+	c.set("org0", 9999)
 	assert.Len(t, c.entries, maxInstallationCacheEntries, "updating existing key at capacity must not evict")
-	assert.Equal(t, int64(9999), c.get("org0/repo0"))
+	assert.Equal(t, int64(9999), c.get("org0"))
 }
 
 func TestGetContents_InvalidRepository(t *testing.T) {
@@ -861,26 +896,26 @@ func TestInstallationCache_GetSet(t *testing.T) {
 	t.Parallel()
 	c := newInstallationCache()
 
-	assert.Equal(t, int64(0), c.get("example-org/example-repo"))
+	assert.Equal(t, int64(0), c.get("example-org"))
 
-	c.set("example-org/example-repo", 12345)
-	assert.Equal(t, int64(12345), c.get("example-org/example-repo"))
+	c.set("example-org", 12345)
+	assert.Equal(t, int64(12345), c.get("example-org"))
 }
 
 func TestInstallationCache_Expiration(t *testing.T) {
 	t.Parallel()
 	c := newInstallationCache()
 
-	c.set("example-org/example-repo", 12345)
-	assert.Equal(t, int64(12345), c.get("example-org/example-repo"))
+	c.set("example-org", 12345)
+	assert.Equal(t, int64(12345), c.get("example-org"))
 
 	c.mu.Lock()
-	e := c.entries["example-org/example-repo"]
+	e := c.entries["example-org"]
 	e.fetched = time.Now().Add(-25 * time.Hour)
-	c.entries["example-org/example-repo"] = e
+	c.entries["example-org"] = e
 	c.mu.Unlock()
 
-	assert.Equal(t, int64(0), c.get("example-org/example-repo"))
+	assert.Equal(t, int64(0), c.get("example-org"))
 }
 
 func TestInstallationCache_Eviction(t *testing.T) {
@@ -888,17 +923,17 @@ func TestInstallationCache_Eviction(t *testing.T) {
 	c := newInstallationCache()
 
 	for i := range maxInstallationCacheEntries {
-		c.set(fmt.Sprintf("org%d/repo%d", i, i), int64(i+1000))
+		c.set(fmt.Sprintf("org%d", i), int64(i+1000))
 		if i%100 == 0 {
 			time.Sleep(time.Millisecond)
 		}
 	}
 	assert.Len(t, c.entries, maxInstallationCacheEntries)
 
-	c.set("neworg/newrepo", 99999)
+	c.set("neworg", 99999)
 	assert.Len(t, c.entries, maxInstallationCacheEntries)
-	assert.Equal(t, int64(99999), c.get("neworg/newrepo"))
-	assert.Equal(t, int64(0), c.get("org0/repo0"))
+	assert.Equal(t, int64(99999), c.get("neworg"))
+	assert.Equal(t, int64(0), c.get("org0"))
 }
 
 func TestTokenCache_GetSet(t *testing.T) {

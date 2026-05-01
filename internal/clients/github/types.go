@@ -38,9 +38,9 @@ type RateLimitInfo struct {
 }
 
 const (
-	// maxInstallationCacheEntries caps the in-memory installation ID cache size.
+	// maxInstallationCacheEntries caps cached owners (one entry per account).
 	maxInstallationCacheEntries = 1000
-	// installationCacheTTL evicts entries to avoid stale IDs after GitHub App scope changes.
+	// installationCacheTTL evicts entries to avoid stale IDs after uninstall/reinstall.
 	installationCacheTTL = 24 * time.Hour
 	// maxTokenCacheEntries caps the in-memory contents-token cache size.
 	maxTokenCacheEntries = 1000
