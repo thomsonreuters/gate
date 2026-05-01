@@ -18,7 +18,7 @@
 BINARY_NAME := gate
 DOCKER_IMAGE := gate
 DOCKER_TAG := latest
-GO_VERSION := 1.26.1
+GO_VERSION := $(shell grep '^go ' go.mod | awk '{print $$2}')
 
 # Container tool detection (prefer podman, fallback to docker)
 CONTAINER_TOOL := $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo "docker")
@@ -58,7 +58,7 @@ GO_BUILD := GOFIPS140=$(GOFIPS140) go build -ldflags="$(LDFLAGS)"
 UID := $(shell id -u)
 GID := $(shell id -g)
 CONFIG_FILE ?= config.yaml
-COMPOSE_CMD := HOST_UID=$(UID) HOST_GID=$(GID) CONFIG_FILE=$(CONFIG_FILE) docker compose -f local/compose.dev.yml
+COMPOSE_CMD := HOST_UID=$(UID) HOST_GID=$(GID) CONFIG_FILE=$(CONFIG_FILE) GOLANG_VERSION=$(GO_VERSION) docker compose -f local/compose.dev.yml
 VOLUMES_DIR := ./local/.volumes
 # =============================================================================
 
