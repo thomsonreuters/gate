@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -32,6 +33,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	gogithub "github.com/google/go-github/v83/github"
 	"github.com/thomsonreuters/gate/internal/utils"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -60,11 +62,15 @@ type ClientIface interface {
 
 // Client manages GitHub API interactions for token generation.
 type Client struct {
-	clientID      string
-	key           *rsa.PrivateKey
-	baseURL       string
-	httpClient    *http.Client
-	installations *installationCache
+	clientID        string
+	key             *rsa.PrivateKey
+	baseURL         string
+	httpClient      *http.Client
+	installations   *installationCache
+	installationSF  singleflight.Group
+	contentsTokens  *tokenCache
+	tokenMintSF     singleflight.Group
+	tokenReadyDelay time.Duration
 }
 
 // ghClient returns a go-github client authenticated with the given token.
@@ -81,11 +87,10 @@ func (c *Client) ghClient(token string) (*gogithub.Client, error) {
 }
 
 func (c *Client) RequestToken(ctx context.Context, req *TokenRequest) (*TokenResponse, error) {
-	parts := strings.Split(req.Repository, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidRepository, req.Repository)
+	owner, repo, err := parseRepository(req.Repository)
+	if err != nil {
+		return nil, err
 	}
-	owner, repo := parts[0], parts[1]
 
 	id, err := c.getInstallationID(ctx, owner, repo)
 	if err != nil {
@@ -138,74 +143,139 @@ func (c *Client) RevokeToken(ctx context.Context, token string) error {
 }
 
 func (c *Client) GetContents(ctx context.Context, repository string, path string) ([]byte, error) {
-	parts := strings.Split(repository, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return nil, fmt.Errorf("%w: %s", ErrInvalidRepository, repository)
-	}
-	owner, repo := parts[0], parts[1]
-
-	id, err := c.getInstallationID(ctx, owner, repo)
-	if err != nil {
-		return nil, fmt.Errorf("getting installation ID: %w", err)
-	}
-
-	token, err := c.createInstallationToken(ctx, id, repo, map[string]string{"contents": "read"})
-	if err != nil {
-		return nil, fmt.Errorf("getting contents token: %w", err)
-	}
-
-	gh, err := c.ghClient(token.Token)
+	owner, repo, err := parseRepository(repository)
 	if err != nil {
 		return nil, err
 	}
 
-	fileContent, _, resp, err := gh.Repositories.GetContents(ctx, owner, repo, path, nil)
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return nil, fmt.Errorf("%w: %s/%s", ErrFileNotFound, repository, path)
+	// Retry once: if a cached token yields 401/403, evict it and mint a fresh one.
+	for attempt := range 2 {
+		tok, cached, err := c.contentsToken(ctx, repository, owner, repo)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("fetching contents: %w", err)
-	}
-	if fileContent == nil {
-		return nil, fmt.Errorf("%w: %s/%s is a directory", ErrFileNotFound, repository, path)
-	}
 
-	content, err := fileContent.GetContent()
-	if err != nil {
-		return nil, fmt.Errorf("decoding content: %w", err)
-	}
+		gh, err := c.ghClient(tok)
+		if err != nil {
+			return nil, err
+		}
 
-	return []byte(content), nil
+		fileContent, _, resp, err := gh.Repositories.GetContents(ctx, owner, repo, path, nil)
+		if err != nil {
+			if attempt == 0 && cached && resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+				c.contentsTokens.delete(repository)
+				continue
+			}
+			if resp != nil && resp.StatusCode == http.StatusNotFound {
+				return nil, fmt.Errorf("%w: %s/%s", ErrFileNotFound, repository, path)
+			}
+			return nil, fmt.Errorf("fetching contents: %w", err)
+		}
+		if fileContent == nil {
+			return nil, fmt.Errorf("%w: %s/%s is a directory", ErrFileNotFound, repository, path)
+		}
+
+		content, err := fileContent.GetContent()
+		if err != nil {
+			return nil, fmt.Errorf("decoding content: %w", err)
+		}
+		return []byte(content), nil
+	}
+	return nil, errors.New("unexpected: exhausted GetContents retry")
 }
 
-// getInstallationID returns the app installation ID for owner/repo, using cache when available.
+// contentsToken returns a repo-scoped contents:read token, serving from
+// cache when possible. On a cache miss, concurrent callers for the same
+// repository are coalesced so only one mint + replication delay occurs.
+// The bool indicates whether the token was served from cache.
+func (c *Client) contentsToken(ctx context.Context, repository, owner, repo string) (string, bool, error) {
+	if tok := c.contentsTokens.get(repository); tok != "" {
+		return tok, true, nil
+	}
+
+	perms := map[string]string{"contents": "read"}
+	tok, err := c.mintToken(ctx, repository, owner, repo, perms, c.contentsTokens)
+	if err != nil {
+		return "", false, err
+	}
+	return tok, false, nil
+}
+
+// mintToken creates a new installation token with the given permissions,
+// waits for edge replication, and stores the result in cache. Concurrent
+// calls for the same repository+permissions share a single in-flight
+// mint via singleflight.
+func (c *Client) mintToken(ctx context.Context, repository, owner, repo string, perms map[string]string, cache *tokenCache) (string, error) {
+	sfKey := repository + "|" + permissionsKey(perms)
+
+	v, err, _ := c.tokenMintSF.Do(sfKey, func() (any, error) {
+		if tok := cache.get(repository); tok != "" {
+			return tok, nil
+		}
+
+		id, err := c.getInstallationID(ctx, owner, repo)
+		if err != nil {
+			return nil, fmt.Errorf("getting installation ID: %w", err)
+		}
+
+		token, err := c.createInstallationToken(ctx, id, repo, perms)
+		if err != nil {
+			return nil, fmt.Errorf("minting installation token: %w", err)
+		}
+
+		if err := c.waitTokenReady(ctx); err != nil {
+			return nil, err
+		}
+
+		cache.set(repository, token.Token, token.ExpiresAt)
+		return token.Token, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return v.(string), nil //nolint:errcheck // singleflight guarantees string on nil error
+}
+
+// getInstallationID returns the app installation ID for owner. Installations
+// are per-account, so cache and singleflight are keyed by owner; repo is
+// only used for the API lookup on cache miss.
 func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int64, error) {
-	key := owner + "/" + repo
+	key := owner
 
 	if id := c.installations.get(key); id != 0 {
 		return id, nil
 	}
 
-	appJWT, err := c.generateAppJWT()
-	if err != nil {
-		return 0, fmt.Errorf("generating app JWT: %w", err)
-	}
+	v, err, _ := c.installationSF.Do(key, func() (any, error) {
+		if id := c.installations.get(key); id != 0 {
+			return id, nil
+		}
 
-	gh, err := c.ghClient(appJWT)
+		appJWT, err := c.generateAppJWT()
+		if err != nil {
+			return nil, fmt.Errorf("generating app JWT: %w", err)
+		}
+
+		gh, err := c.ghClient(appJWT)
+		if err != nil {
+			return nil, err
+		}
+
+		installation, resp, err := gh.Apps.FindRepositoryInstallation(ctx, owner, repo)
+		if err != nil {
+			if resp != nil && resp.StatusCode == http.StatusNotFound {
+				return nil, fmt.Errorf("%w: %s/%s", ErrRepositoryNotFound, owner, repo)
+			}
+			return nil, fmt.Errorf("fetching installation ID: %w", err)
+		}
+
+		c.installations.set(key, installation.GetID())
+		return installation.GetID(), nil
+	})
 	if err != nil {
 		return 0, err
 	}
-
-	installation, resp, err := gh.Apps.FindRepositoryInstallation(ctx, owner, repo)
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusNotFound {
-			return 0, fmt.Errorf("%w: %s/%s", ErrRepositoryNotFound, owner, repo)
-		}
-		return 0, fmt.Errorf("fetching installation ID: %w", err)
-	}
-
-	c.installations.set(key, installation.GetID())
-	return installation.GetID(), nil
+	return v.(int64), nil //nolint:errcheck // singleflight guarantees int64 on nil error
 }
 
 // createInstallationToken creates a repository-scoped installation
@@ -235,8 +305,13 @@ func (c *Client) createInstallationToken(ctx context.Context, id int64, reposito
 		Repositories: []string{repository},
 	}
 
-	token, _, err := gh.Apps.CreateInstallationToken(ctx, id, opts)
+	token, resp, err := gh.Apps.CreateInstallationToken(ctx, id, opts)
 	if err != nil {
+		// 404 (no installation) and 422 (repo outside installation scope)
+		// match getInstallationID's ErrRepositoryNotFound contract.
+		if resp != nil && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity) {
+			return nil, fmt.Errorf("%w: %s", ErrRepositoryNotFound, repository)
+		}
 		return nil, fmt.Errorf("creating installation token: %w", err)
 	}
 
@@ -284,6 +359,22 @@ func (c *Client) toInstallationPermissions(m map[string]string) (*gogithub.Insta
 	return p, nil
 }
 
+// waitTokenReady pauses for tokenReadyDelay to allow a newly minted
+// installation token to replicate across GitHub's edge infrastructure.
+func (c *Client) waitTokenReady(ctx context.Context) error {
+	if c.tokenReadyDelay <= 0 {
+		return nil
+	}
+	t := time.NewTimer(c.tokenReadyDelay)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("waiting for token replication: %w", ctx.Err())
+	}
+}
+
 // New is the constructor for the GitHub client. It is a package-level
 // variable so tests can replace it.
 var New = newClient
@@ -308,10 +399,12 @@ func newClient(opts Options) (ClientIface, error) {
 	}
 
 	return &Client{
-		clientID:      opts.ClientID,
-		key:           key,
-		baseURL:       strings.TrimRight(opts.BaseURL, "/"),
-		httpClient:    &http.Client{Timeout: opts.Timeout, Transport: transport},
-		installations: newInstallationCache(),
+		clientID:        opts.ClientID,
+		key:             key,
+		baseURL:         strings.TrimRight(opts.BaseURL, "/"),
+		httpClient:      &http.Client{Timeout: opts.Timeout, Transport: transport},
+		installations:   newInstallationCache(),
+		contentsTokens:  newTokenCache(),
+		tokenReadyDelay: DefaultTokenReadyDelay,
 	}, nil
 }

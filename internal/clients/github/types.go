@@ -38,10 +38,15 @@ type RateLimitInfo struct {
 }
 
 const (
-	// maxInstallationCacheEntries caps the in-memory installation ID cache size.
+	// maxInstallationCacheEntries caps cached owners (one entry per account).
 	maxInstallationCacheEntries = 1000
-	// installationCacheTTL evicts entries to avoid stale IDs after GitHub App scope changes.
+	// installationCacheTTL evicts entries to avoid stale IDs after uninstall/reinstall.
 	installationCacheTTL = 24 * time.Hour
+	// maxTokenCacheEntries caps the in-memory contents-token cache size.
+	maxTokenCacheEntries = 1000
+	// tokenCacheExpiryBuffer prevents serving a token that is about to expire:
+	// a token is not served if the current time is within this buffer of its ExpiresAt.
+	tokenCacheExpiryBuffer = 5 * time.Minute
 )
 
 type installationCache struct {
@@ -90,7 +95,7 @@ func (c *installationCache) set(key string, id int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if len(c.entries) >= maxInstallationCacheEntries && c.entries[key].id == 0 {
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= maxInstallationCacheEntries {
 		var oldest string
 		var oldestTime time.Time
 		for k, e := range c.entries {
@@ -108,4 +113,78 @@ func (c *installationCache) set(key string, id int64) {
 		id:      id,
 		fetched: time.Now(),
 	}
+}
+
+// tokenCache is a concurrency-safe cache for repo-scoped installation tokens.
+// It allows GetContents to reuse a previously minted token for the same repo,
+// avoiding repeated token creation and the associated replication delay.
+type tokenCache struct {
+	mu      sync.RWMutex
+	entries map[string]tokenEntry
+}
+
+type tokenEntry struct {
+	token     string
+	expiresAt time.Time
+}
+
+func newTokenCache() *tokenCache {
+	return &tokenCache{
+		entries: make(map[string]tokenEntry),
+	}
+}
+
+// get returns a cached token for the key, or empty string if missing/expired.
+func (c *tokenCache) get(key string) string {
+	c.mu.RLock()
+	e, ok := c.entries[key]
+	c.mu.RUnlock()
+
+	if !ok {
+		return ""
+	}
+
+	if time.Now().After(e.expiresAt.Add(-tokenCacheExpiryBuffer)) {
+		c.mu.Lock()
+		if re, ok := c.entries[key]; ok && time.Now().After(re.expiresAt.Add(-tokenCacheExpiryBuffer)) {
+			delete(c.entries, key)
+		}
+		c.mu.Unlock()
+		return ""
+	}
+
+	return e.token
+}
+
+// set stores a token in the cache, evicting the entry closest to expiry when at capacity.
+func (c *tokenCache) set(key string, token string, expiresAt time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, exists := c.entries[key]; !exists && len(c.entries) >= maxTokenCacheEntries {
+		var earliest string
+		var earliestExp time.Time
+		for k, e := range c.entries {
+			if earliest == "" || e.expiresAt.Before(earliestExp) {
+				earliest = k
+				earliestExp = e.expiresAt
+			}
+		}
+		if earliest != "" {
+			delete(c.entries, earliest)
+		}
+	}
+
+	c.entries[key] = tokenEntry{
+		token:     token,
+		expiresAt: expiresAt,
+	}
+}
+
+// delete removes a token from the cache, e.g. after a 401/403 indicates
+// the token was revoked or is no longer valid.
+func (c *tokenCache) delete(key string) {
+	c.mu.Lock()
+	delete(c.entries, key)
+	c.mu.Unlock()
 }

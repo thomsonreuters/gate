@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -309,6 +310,17 @@ func TestRequestToken_TokenCreationFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "creating installation token")
 }
 
+// newTestClient creates a Client with zero tokenReadyDelay for fast tests.
+func newTestClient(t *testing.T, opts Options) ClientIface {
+	t.Helper()
+	c, err := New(opts)
+	require.NoError(t, err)
+	client, ok := c.(*Client)
+	require.True(t, ok)
+	client.tokenReadyDelay = 0
+	return client
+}
+
 func TestGetContents_Success(t *testing.T) {
 	t.Parallel()
 	_, keyPEM := testutil.GenerateRSAKey(t)
@@ -342,8 +354,7 @@ func TestGetContents_Success(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
-	require.NoError(t, err)
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 
 	content, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
 	require.NoError(t, err)
@@ -374,10 +385,9 @@ func TestGetContents_FileNotFound(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
-	require.NoError(t, err)
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 
-	_, err = c.GetContents(t.Context(), "example-org/example-repo", "nonexistent.yaml")
+	_, err := c.GetContents(t.Context(), "example-org/example-repo", "nonexistent.yaml")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrFileNotFound)
 }
@@ -392,12 +402,286 @@ func TestGetContents_RepositoryNotFound(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
-	require.NoError(t, err)
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
 
-	_, err = c.GetContents(t.Context(), "example-org/nonexistent-repo", ".github/policy.yaml")
+	_, err := c.GetContents(t.Context(), "example-org/nonexistent-repo", ".github/policy.yaml")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrRepositoryNotFound)
+}
+
+func TestGetContents_TokenReadyDelay(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var contentsAttempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+				"token":      "ghs_contents_token",
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/contents/") {
+			contentsAttempts.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":     "file",
+				"encoding": "base64",
+				"content":  "dmVyc2lvbjogIjEuMCI=",
+			})
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+	require.NoError(t, err)
+	client, ok := c.(*Client)
+	require.True(t, ok)
+	client.tokenReadyDelay = 50 * time.Millisecond
+
+	start := time.Now()
+	_, err = c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, elapsed, 50*time.Millisecond, "should wait for token ready delay")
+	assert.Equal(t, int32(1), contentsAttempts.Load(), "should succeed on first attempt after delay")
+}
+
+func TestGetContents_TokenReadyDelay_ContextCancellation(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token":      "ghs_token",
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	c, err := New(Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+	require.NoError(t, err)
+	client, ok := c.(*Client)
+	require.True(t, ok)
+	client.tokenReadyDelay = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err = c.GetContents(ctx, "example-org/example-repo", ".github/trust-policy.yaml")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestGetContents_RetriesWithFreshTokenOnAuthError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		statusCode int
+		errBody    string
+	}{
+		{name: "403", statusCode: http.StatusForbidden, errBody: `{"message":"Resource not accessible by integration"}`},
+		{name: "401", statusCode: http.StatusUnauthorized, errBody: `{"message":"Bad credentials"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, keyPEM := testutil.GenerateRSAKey(t)
+
+			var tokenCreations atomic.Int32
+			revokedToken := atomic.Value{}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+
+				if strings.HasSuffix(r.URL.Path, "/installation") {
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/access_tokens") {
+					n := tokenCreations.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      fmt.Sprintf("ghs_tok_%d", n),
+						"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+					})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/contents/") {
+					auth := r.Header.Get("Authorization")
+					if revoked, ok := revokedToken.Load().(string); ok && strings.Contains(auth, revoked) {
+						http.Error(w, tt.errBody, tt.statusCode)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"type":     "file",
+						"encoding": "base64",
+						"content":  "dmVyc2lvbjogIjEuMCI=",
+					})
+					return
+				}
+				http.Error(w, "not found", http.StatusNotFound)
+			}))
+			t.Cleanup(server.Close)
+
+			c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+			_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+			require.NoError(t, err)
+			assert.Equal(t, int32(1), tokenCreations.Load())
+
+			revokedToken.Store("ghs_tok_1")
+
+			content, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+			require.NoError(t, err, "should succeed after retrying with fresh token")
+			assert.Equal(t, `version: "1.0"`, string(content))
+			assert.Equal(t, int32(2), tokenCreations.Load(), "should have minted a fresh token")
+		})
+	}
+}
+
+func TestGetContents_Persistent403(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		preSeed         bool
+		wantMints       int32
+		wantContentHits int32
+	}{
+		// Pre-seeded: cached token → 403 (retried by retryTransport 4×) → evict → mint fresh → 403 (4×)
+		{name: "cached_token_retries_then_fails", preSeed: true, wantMints: 1, wantContentHits: 8},
+		// No cache: mint fresh → 403 (retried by retryTransport 4×) → no second attempt
+		{name: "fresh_token_does_not_retry", preSeed: false, wantMints: 1, wantContentHits: 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, keyPEM := testutil.GenerateRSAKey(t)
+
+			var tokenCreations atomic.Int32
+			var contentHits atomic.Int32
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+
+				if strings.HasSuffix(r.URL.Path, "/installation") {
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/access_tokens") {
+					tokenCreations.Add(1)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"token":      fmt.Sprintf("ghs_tok_%d", tokenCreations.Load()),
+						"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+					})
+					return
+				}
+				if strings.Contains(r.URL.Path, "/contents/") {
+					contentHits.Add(1)
+					http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
+					return
+				}
+				http.Error(w, "not found", http.StatusNotFound)
+			}))
+			t.Cleanup(server.Close)
+
+			c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+			if tt.preSeed {
+				client, ok := c.(*Client)
+				require.True(t, ok)
+				client.contentsTokens.set(
+					"example-org/example-repo",
+					"ghs_stale",
+					time.Now().Add(time.Hour),
+				)
+			}
+
+			_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "403")
+			assert.Equal(t, tt.wantMints, tokenCreations.Load())
+			assert.Equal(t, tt.wantContentHits, contentHits.Load())
+		})
+	}
+}
+
+func TestGetContents_RepoOutsideInstallationScope(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var installationLookups atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.HasSuffix(r.URL.Path, "/installation") {
+			installationLookups.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+			return
+		}
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			http.Error(w,
+				`{"message":"There is at least one repository that does not exist or is not accessible to the parent installation."}`,
+				http.StatusUnprocessableEntity)
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+	client, ok := c.(*Client)
+	require.True(t, ok)
+	client.installations.set("example-org", 12345)
+
+	_, err := c.GetContents(t.Context(), "example-org/excluded-repo", ".github/trust-policy.yaml")
+	require.ErrorIs(t, err, ErrRepositoryNotFound)
+	assert.Equal(t, int32(0), installationLookups.Load(), "warm installation cache should skip lookup")
+}
+
+func TestInstallationCache_UpdateExistingAtCapacity(t *testing.T) {
+	t.Parallel()
+	c := newInstallationCache()
+
+	for i := range maxInstallationCacheEntries {
+		c.set(fmt.Sprintf("org%d", i), int64(i+1000))
+		if i%100 == 0 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	assert.Len(t, c.entries, maxInstallationCacheEntries)
+
+	c.set("org0", 9999)
+	assert.Len(t, c.entries, maxInstallationCacheEntries, "updating existing key at capacity must not evict")
+	assert.Equal(t, int64(9999), c.get("org0"))
 }
 
 func TestGetContents_InvalidRepository(t *testing.T) {
@@ -611,26 +895,26 @@ func TestInstallationCache_GetSet(t *testing.T) {
 	t.Parallel()
 	c := newInstallationCache()
 
-	assert.Equal(t, int64(0), c.get("example-org/example-repo"))
+	assert.Equal(t, int64(0), c.get("example-org"))
 
-	c.set("example-org/example-repo", 12345)
-	assert.Equal(t, int64(12345), c.get("example-org/example-repo"))
+	c.set("example-org", 12345)
+	assert.Equal(t, int64(12345), c.get("example-org"))
 }
 
 func TestInstallationCache_Expiration(t *testing.T) {
 	t.Parallel()
 	c := newInstallationCache()
 
-	c.set("example-org/example-repo", 12345)
-	assert.Equal(t, int64(12345), c.get("example-org/example-repo"))
+	c.set("example-org", 12345)
+	assert.Equal(t, int64(12345), c.get("example-org"))
 
 	c.mu.Lock()
-	e := c.entries["example-org/example-repo"]
+	e := c.entries["example-org"]
 	e.fetched = time.Now().Add(-25 * time.Hour)
-	c.entries["example-org/example-repo"] = e
+	c.entries["example-org"] = e
 	c.mu.Unlock()
 
-	assert.Equal(t, int64(0), c.get("example-org/example-repo"))
+	assert.Equal(t, int64(0), c.get("example-org"))
 }
 
 func TestInstallationCache_Eviction(t *testing.T) {
@@ -638,17 +922,126 @@ func TestInstallationCache_Eviction(t *testing.T) {
 	c := newInstallationCache()
 
 	for i := range maxInstallationCacheEntries {
-		c.set(fmt.Sprintf("org%d/repo%d", i, i), int64(i+1000))
+		c.set(fmt.Sprintf("org%d", i), int64(i+1000))
 		if i%100 == 0 {
 			time.Sleep(time.Millisecond)
 		}
 	}
 	assert.Len(t, c.entries, maxInstallationCacheEntries)
 
-	c.set("neworg/newrepo", 99999)
+	c.set("neworg", 99999)
 	assert.Len(t, c.entries, maxInstallationCacheEntries)
-	assert.Equal(t, int64(99999), c.get("neworg/newrepo"))
-	assert.Equal(t, int64(0), c.get("org0/repo0"))
+	assert.Equal(t, int64(99999), c.get("neworg"))
+	assert.Equal(t, int64(0), c.get("org0"))
+}
+
+func TestTokenCache_GetSet(t *testing.T) {
+	t.Parallel()
+	c := newTokenCache()
+
+	assert.Empty(t, c.get("example-org/example-repo"))
+
+	c.set("example-org/example-repo", "ghs_abc", time.Now().Add(time.Hour))
+	assert.Equal(t, "ghs_abc", c.get("example-org/example-repo"))
+}
+
+func TestTokenCache_Expiration(t *testing.T) {
+	t.Parallel()
+	c := newTokenCache()
+
+	c.set("example-org/example-repo", "ghs_abc", time.Now().Add(2*time.Minute))
+	assert.Empty(t, c.get("example-org/example-repo"), "token expiring within buffer window should not be served")
+
+	c.set("example-org/example-repo", "ghs_fresh", time.Now().Add(time.Hour))
+	assert.Equal(t, "ghs_fresh", c.get("example-org/example-repo"))
+}
+
+func TestTokenCache_Delete(t *testing.T) {
+	t.Parallel()
+	c := newTokenCache()
+
+	c.set("example-org/repo-a", "ghs_abc", time.Now().Add(time.Hour))
+	assert.Equal(t, "ghs_abc", c.get("example-org/repo-a"))
+
+	c.delete("example-org/repo-a")
+	assert.Empty(t, c.get("example-org/repo-a"))
+
+	c.delete("nonexistent/key")
+}
+
+func TestTokenCache_Eviction(t *testing.T) {
+	t.Parallel()
+	c := newTokenCache()
+
+	for i := range maxTokenCacheEntries {
+		c.set(fmt.Sprintf("org%d/repo%d", i, i), fmt.Sprintf("tok_%d", i), time.Now().Add(time.Hour+time.Duration(i)*time.Millisecond))
+	}
+	assert.Len(t, c.entries, maxTokenCacheEntries)
+
+	c.set("neworg/newrepo", "tok_new", time.Now().Add(time.Hour))
+	assert.Len(t, c.entries, maxTokenCacheEntries)
+	assert.Equal(t, "tok_new", c.get("neworg/newrepo"))
+	assert.Empty(t, c.get("org0/repo0"), "entry with earliest expiry should have been evicted")
+}
+
+func TestTokenCache_UpdateExistingAtCapacity(t *testing.T) {
+	t.Parallel()
+	c := newTokenCache()
+
+	for i := range maxTokenCacheEntries {
+		c.set(fmt.Sprintf("org%d/repo%d", i, i), fmt.Sprintf("tok_%d", i), time.Now().Add(time.Hour))
+	}
+	assert.Len(t, c.entries, maxTokenCacheEntries)
+
+	c.set("org0/repo0", "tok_updated", time.Now().Add(2*time.Hour))
+	assert.Len(t, c.entries, maxTokenCacheEntries, "updating existing key at capacity must not evict")
+	assert.Equal(t, "tok_updated", c.get("org0/repo0"))
+}
+
+func TestGetContents_CachedToken(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var tokenCreations atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			tokenCreations.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+				"token":      "ghs_contents_token",
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+			return
+		}
+
+		if strings.Contains(r.URL.Path, "/contents/") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type":     "file",
+				"encoding": "base64",
+				"content":  "dmVyc2lvbjogIjEuMCI=",
+			})
+			return
+		}
+
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	t.Cleanup(server.Close)
+
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), tokenCreations.Load())
+
+	_, err = c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), tokenCreations.Load(), "second call should reuse cached token")
 }
 
 func TestNetworkError(t *testing.T) {
