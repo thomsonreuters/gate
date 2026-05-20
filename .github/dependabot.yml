@@ -19,6 +19,8 @@ updates:
     schedule:
       interval: "monthly"
     target-branch: "main"
+    cooldown:
+      default-days: 10
     groups:
       actions:
         patterns:
@@ -29,6 +31,8 @@ updates:
     schedule:
       interval: "monthly"
     target-branch: "main"
+    cooldown:
+      default-days: 10
     allow:
       - dependency-type: "all"
     groups:
@@ -41,6 +45,8 @@ updates:
     schedule:
       interval: "monthly"
     target-branch: "main"
+    cooldown:
+      default-days: 10
     groups:
       docker:
         patterns:
