@@ -194,7 +194,7 @@ func (c *Client) GetContents(ctx context.Context, repository string, path string
 // mintToken returns a cached or freshly minted installation token.
 // When repo is non-empty the token is scoped to that single repository;
 // when empty the token covers every repo the installation can access.
-// Tokens are keyed by owner[/repo]+permissions.
+// Tokens are keyed by '<owner>[/<repo>]'+'|<permissions>'.
 func (c *Client) mintToken(ctx context.Context, owner, repo string, perms map[string]string, opts *mintOpts) (string, error) {
 	key := owner
 	if repo != "" {
