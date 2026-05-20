@@ -23,7 +23,6 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -68,9 +67,14 @@ type Client struct {
 	httpClient      *http.Client
 	installations   *installationCache
 	installationSF  singleflight.Group
-	contentsTokens  *tokenCache
+	tokens          *tokenCache
 	tokenMintSF     singleflight.Group
 	tokenReadyDelay time.Duration
+}
+
+// mintOpts controls mintToken behavior.
+type mintOpts struct {
+	skipCache bool // skip cache and mint a fresh token
 }
 
 // ghClient returns a go-github client authenticated with the given token.
@@ -92,7 +96,7 @@ func (c *Client) RequestToken(ctx context.Context, req *TokenRequest) (*TokenRes
 		return nil, err
 	}
 
-	id, err := c.getInstallationID(ctx, owner, repo)
+	id, err := c.getInstallationID(ctx, owner)
 	if err != nil {
 		return nil, fmt.Errorf("getting installation ID: %w", err)
 	}
@@ -148,9 +152,12 @@ func (c *Client) GetContents(ctx context.Context, repository string, path string
 		return nil, err
 	}
 
-	// Retry once: if a cached token yields 401/403, evict it and mint a fresh one.
+	perms := map[string]string{"contents": "read"}
+	var opts *mintOpts
+
+	// Retry once on 401/403 in case the token was stale; the second attempt mints fresh.
 	for attempt := range 2 {
-		tok, cached, err := c.contentsToken(ctx, repository, owner, repo)
+		tok, err := c.mintToken(ctx, owner, "", perms, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -162,8 +169,8 @@ func (c *Client) GetContents(ctx context.Context, repository string, path string
 
 		fileContent, _, resp, err := gh.Repositories.GetContents(ctx, owner, repo, path, nil)
 		if err != nil {
-			if attempt == 0 && cached && resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
-				c.contentsTokens.delete(repository)
+			if attempt == 0 && resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+				opts = &mintOpts{skipCache: true}
 				continue
 			}
 			if resp != nil && resp.StatusCode == http.StatusNotFound {
@@ -181,44 +188,41 @@ func (c *Client) GetContents(ctx context.Context, repository string, path string
 		}
 		return []byte(content), nil
 	}
-	return nil, errors.New("unexpected: exhausted GetContents retry")
+	return nil, fmt.Errorf("unexpected: exhausted GetContents retries for %s/%s", repository, path)
 }
 
-// contentsToken returns a repo-scoped contents:read token, serving from
-// cache when possible. On a cache miss, concurrent callers for the same
-// repository are coalesced so only one mint + replication delay occurs.
-// The bool indicates whether the token was served from cache.
-func (c *Client) contentsToken(ctx context.Context, repository, owner, repo string) (string, bool, error) {
-	if tok := c.contentsTokens.get(repository); tok != "" {
-		return tok, true, nil
+// mintToken returns a cached or freshly minted installation token.
+// When repo is non-empty the token is scoped to that single repository;
+// when empty the token covers every repo the installation can access.
+// Tokens are keyed by owner[/repo]+permissions.
+func (c *Client) mintToken(ctx context.Context, owner, repo string, perms map[string]string, opts *mintOpts) (string, error) {
+	key := owner
+	if repo != "" {
+		key = owner + "/" + repo
+	}
+	key += "|" + permissionsKey(perms)
+
+	skipCache := opts != nil && opts.skipCache
+
+	if skipCache {
+		c.tokens.delete(key)
+	} else if tok := c.tokens.get(key); tok != "" {
+		return tok, nil
 	}
 
-	perms := map[string]string{"contents": "read"}
-	tok, err := c.mintToken(ctx, repository, owner, repo, perms, c.contentsTokens)
-	if err != nil {
-		return "", false, err
-	}
-	return tok, false, nil
-}
-
-// mintToken creates a new installation token with the given permissions,
-// waits for edge replication, and stores the result in cache. Concurrent
-// calls for the same repository+permissions share a single in-flight
-// mint via singleflight.
-func (c *Client) mintToken(ctx context.Context, repository, owner, repo string, perms map[string]string, cache *tokenCache) (string, error) {
-	sfKey := repository + "|" + permissionsKey(perms)
-
-	v, err, _ := c.tokenMintSF.Do(sfKey, func() (any, error) {
-		if tok := cache.get(repository); tok != "" {
-			return tok, nil
+	v, err, _ := c.tokenMintSF.Do(key, func() (any, error) {
+		if !skipCache {
+			if tok := c.tokens.get(key); tok != "" {
+				return tok, nil
+			}
 		}
 
-		id, err := c.getInstallationID(ctx, owner, repo)
+		id, err := c.getInstallationID(ctx, owner)
 		if err != nil {
 			return nil, fmt.Errorf("getting installation ID: %w", err)
 		}
 
-		token, err := c.createInstallationToken(ctx, id, repo, perms)
+		resp, err := c.createInstallationToken(ctx, id, repo, perms)
 		if err != nil {
 			return nil, fmt.Errorf("minting installation token: %w", err)
 		}
@@ -227,8 +231,8 @@ func (c *Client) mintToken(ctx context.Context, repository, owner, repo string, 
 			return nil, err
 		}
 
-		cache.set(repository, token.Token, token.ExpiresAt)
-		return token.Token, nil
+		c.tokens.set(key, resp.Token, resp.ExpiresAt)
+		return resp.Token, nil
 	})
 	if err != nil {
 		return "", err
@@ -236,18 +240,15 @@ func (c *Client) mintToken(ctx context.Context, repository, owner, repo string, 
 	return v.(string), nil //nolint:errcheck // singleflight guarantees string on nil error
 }
 
-// getInstallationID returns the app installation ID for owner. Installations
-// are per-account, so cache and singleflight are keyed by owner; repo is
-// only used for the API lookup on cache miss.
-func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int64, error) {
-	key := owner
-
-	if id := c.installations.get(key); id != 0 {
+// getInstallationID returns the app installation ID for the given owner
+// (organization or user account). Cache and singleflight are keyed by owner.
+func (c *Client) getInstallationID(ctx context.Context, owner string) (int64, error) {
+	if id := c.installations.get(owner); id != 0 {
 		return id, nil
 	}
 
-	v, err, _ := c.installationSF.Do(key, func() (any, error) {
-		if id := c.installations.get(key); id != 0 {
+	v, err, _ := c.installationSF.Do(owner, func() (any, error) {
+		if id := c.installations.get(owner); id != 0 {
 			return id, nil
 		}
 
@@ -261,15 +262,19 @@ func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int
 			return nil, err
 		}
 
-		installation, resp, err := gh.Apps.FindRepositoryInstallation(ctx, owner, repo)
+		// Try organization first, fall back to user on 404.
+		installation, resp, err := gh.Apps.FindOrganizationInstallation(ctx, owner)
+		if err != nil && resp != nil && resp.StatusCode == http.StatusNotFound {
+			installation, resp, err = gh.Apps.FindUserInstallation(ctx, owner)
+		}
 		if err != nil {
 			if resp != nil && resp.StatusCode == http.StatusNotFound {
-				return nil, fmt.Errorf("%w: %s/%s", ErrRepositoryNotFound, owner, repo)
+				return nil, fmt.Errorf("%w: %s", ErrInstallationNotFound, owner)
 			}
 			return nil, fmt.Errorf("fetching installation ID: %w", err)
 		}
 
-		c.installations.set(key, installation.GetID())
+		c.installations.set(owner, installation.GetID())
 		return installation.GetID(), nil
 	})
 	if err != nil {
@@ -278,8 +283,9 @@ func (c *Client) getInstallationID(ctx context.Context, owner, repo string) (int
 	return v.(int64), nil //nolint:errcheck // singleflight guarantees int64 on nil error
 }
 
-// createInstallationToken creates a repository-scoped installation
-// access token with the given permissions.
+// createInstallationToken creates an installation access token with the
+// given permissions. When repository is non-empty the token is scoped to
+// that single repo; when empty it covers all repos the installation can access.
 func (c *Client) createInstallationToken(ctx context.Context, id int64, repository string, permissions map[string]string) (*TokenResponse, error) {
 	appJWT, err := c.generateAppJWT()
 	if err != nil {
@@ -296,21 +302,20 @@ func (c *Client) createInstallationToken(ctx context.Context, id int64, reposito
 		return nil, fmt.Errorf("converting permissions: %w", err)
 	}
 
-	if repository == "" {
-		return nil, ErrRepositoryRequired
-	}
-
 	opts := &gogithub.InstallationTokenOptions{
-		Permissions:  installationPermissions,
-		Repositories: []string{repository},
+		Permissions: installationPermissions,
+	}
+	if repository != "" {
+		opts.Repositories = []string{repository}
 	}
 
 	token, resp, err := gh.Apps.CreateInstallationToken(ctx, id, opts)
 	if err != nil {
-		// 404 (no installation) and 422 (repo outside installation scope)
-		// match getInstallationID's ErrRepositoryNotFound contract.
 		if resp != nil && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnprocessableEntity) {
-			return nil, fmt.Errorf("%w: %s", ErrRepositoryNotFound, repository)
+			if repository != "" {
+				return nil, fmt.Errorf("%w: %s", ErrRepositoryNotFound, repository)
+			}
+			return nil, fmt.Errorf("%w (installation %d)", ErrInstallationNotFound, id)
 		}
 		return nil, fmt.Errorf("creating installation token: %w", err)
 	}
@@ -404,7 +409,7 @@ func newClient(opts Options) (ClientIface, error) {
 		baseURL:         strings.TrimRight(opts.BaseURL, "/"),
 		httpClient:      &http.Client{Timeout: opts.Timeout, Transport: transport},
 		installations:   newInstallationCache(),
-		contentsTokens:  newTokenCache(),
+		tokens:          newTokenCache(),
 		tokenReadyDelay: DefaultTokenReadyDelay,
 	}, nil
 }

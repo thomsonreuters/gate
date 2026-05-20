@@ -134,7 +134,7 @@ func TestRequestToken_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}
@@ -173,7 +173,7 @@ func TestRequestToken_CachedInstallationID(t *testing.T) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}
@@ -287,7 +287,7 @@ func TestRequestToken_TokenCreationFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}
@@ -328,7 +328,7 @@ func TestGetContents_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}
@@ -368,7 +368,7 @@ func TestGetContents_FileNotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}
@@ -406,7 +406,7 @@ func TestGetContents_RepositoryNotFound(t *testing.T) {
 
 	_, err := c.GetContents(t.Context(), "example-org/nonexistent-repo", ".github/policy.yaml")
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrRepositoryNotFound)
+	assert.ErrorIs(t, err, ErrInstallationNotFound)
 }
 
 func TestGetContents_TokenReadyDelay(t *testing.T) {
@@ -417,7 +417,7 @@ func TestGetContents_TokenReadyDelay(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}
@@ -466,7 +466,7 @@ func TestGetContents_TokenReadyDelay_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}
@@ -576,8 +576,8 @@ func TestGetContents_Persistent403(t *testing.T) {
 	}{
 		// Pre-seeded: cached token → 403 (retried by retryTransport 4×) → evict → mint fresh → 403 (4×)
 		{name: "cached_token_retries_then_fails", preSeed: true, wantMints: 1, wantContentHits: 8},
-		// No cache: mint fresh → 403 (retried by retryTransport 4×) → no second attempt
-		{name: "fresh_token_does_not_retry", preSeed: false, wantMints: 1, wantContentHits: 4},
+		// No cache: mint fresh → 403 (4×) → evict → mint again → 403 (4×) → fail
+		{name: "fresh_token_retries_then_fails", preSeed: false, wantMints: 2, wantContentHits: 8},
 	}
 
 	for _, tt := range tests {
@@ -617,8 +617,8 @@ func TestGetContents_Persistent403(t *testing.T) {
 			if tt.preSeed {
 				client, ok := c.(*Client)
 				require.True(t, ok)
-				client.contentsTokens.set(
-					"example-org/example-repo",
+				client.tokens.set(
+					"example-org|contents=read",
 					"ghs_stale",
 					time.Now().Add(time.Hour),
 				)
@@ -663,8 +663,93 @@ func TestGetContents_RepoOutsideInstallationScope(t *testing.T) {
 	client.installations.set("example-org", 12345)
 
 	_, err := c.GetContents(t.Context(), "example-org/excluded-repo", ".github/trust-policy.yaml")
-	require.ErrorIs(t, err, ErrRepositoryNotFound)
+	require.ErrorIs(t, err, ErrInstallationNotFound)
 	assert.Equal(t, int32(0), installationLookups.Load(), "warm installation cache should skip lookup")
+}
+
+func TestGetInstallationID_UserAccountFallback(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var orgLookups, userLookups atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/orgs/example-user/installation"):
+			orgLookups.Add(1)
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+		case strings.HasPrefix(r.URL.Path, "/users/example-user/installation"):
+			userLookups.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 99999})
+		case strings.Contains(r.URL.Path, "/access_tokens"):
+			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+				"token":      "ghs_user_token",
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+		case strings.Contains(r.URL.Path, "/contents/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type": "file", "encoding": "base64", "content": "dmVyc2lvbjogIjEuMCI=",
+			})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+
+	_, err := c.GetContents(t.Context(), "example-user/example-repo", ".github/trust-policy.yaml")
+	require.NoError(t, err)
+	assert.Positive(t, orgLookups.Load(), "should try org endpoint first")
+	assert.Positive(t, userLookups.Load(), "should fall back to user endpoint on org 404")
+}
+
+func TestGetContents_StaleTokenEviction(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testutil.GenerateRSAKey(t)
+
+	var tokenCreations atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
+		case strings.Contains(r.URL.Path, "/access_tokens"):
+			tokenCreations.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+				"token":      "ghs_fresh",
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+		case strings.Contains(r.URL.Path, "/contents/"):
+			if strings.Contains(r.Header.Get("Authorization"), "ghs_stale") {
+				http.Error(w, `{"message":"Resource not accessible by integration"}`, http.StatusForbidden)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"type": "file", "encoding": "base64", "content": "dmVyc2lvbjogIjEuMCI=",
+			})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	c := newTestClient(t, Options{ClientID: "client-1", PrivateKey: keyPEM, BaseURL: server.URL})
+	client, ok := c.(*Client)
+	require.True(t, ok)
+
+	// Pre-seed the cache with a token that will be rejected.
+	client.tokens.set("example-org|contents=read", "ghs_stale", time.Now().Add(time.Hour))
+
+	_, err := c.GetContents(t.Context(), "example-org/example-repo", ".github/trust-policy.yaml")
+	require.NoError(t, err, "should succeed after evicting stale token and minting fresh")
+	assert.Equal(t, int32(1), tokenCreations.Load(), "should mint exactly one fresh token after eviction")
+
+	// After retry, the cache should hold the fresh token, not the stale one.
+	cached := client.tokens.get("example-org|contents=read")
+	assert.Equal(t, "ghs_fresh", cached, "fresh token should be cached, stale should be evicted")
 }
 
 func TestInstallationCache_UpdateExistingAtCapacity(t *testing.T) {
@@ -1006,7 +1091,7 @@ func TestGetContents_CachedToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		if strings.Contains(r.URL.Path, "/repos/example-org/example-repo/installation") {
+		if strings.Contains(r.URL.Path, "/orgs/example-org/installation") {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 			return
 		}

@@ -115,9 +115,9 @@ func (c *installationCache) set(key string, id int64) {
 	}
 }
 
-// tokenCache is a concurrency-safe cache for repo-scoped installation tokens.
-// It allows GetContents to reuse a previously minted token for the same repo,
-// avoiding repeated token creation and the associated replication delay.
+// tokenCache is a concurrency-safe cache for installation tokens, keyed by an
+// arbitrary string (e.g. owner|permissions). It avoids repeated token creation
+// and the associated replication delay by reusing previously minted tokens.
 type tokenCache struct {
 	mu      sync.RWMutex
 	entries map[string]tokenEntry

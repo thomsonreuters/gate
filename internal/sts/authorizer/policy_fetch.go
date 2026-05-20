@@ -82,7 +82,7 @@ func (a *Authorizer) fetchPolicyFromGitHub(ctx context.Context, repository, reso
 			a.cache.set(cacheKey, policy)
 			return policy, nil
 		}
-		if errors.Is(err, github.ErrRepositoryNotFound) {
+		if errors.Is(err, github.ErrRepositoryNotFound) || errors.Is(err, github.ErrInstallationNotFound) {
 			return nil, fmt.Errorf("%w: %s", ErrRepositoryNotAccessible, repository)
 		}
 		if !errors.Is(err, github.ErrFileNotFound) {

@@ -27,8 +27,9 @@ var (
 	// ErrRepositoryNotFound is returned when the repository is not
 	// installed or not accessible to the app.
 	ErrRepositoryNotFound = errors.New("repository not found or not accessible")
-	// ErrRepositoryRequired is returned when the repository is required.
-	ErrRepositoryRequired = errors.New("repository is required")
+	// ErrInstallationNotFound is returned when no GitHub App installation
+	// exists for the given owner (organization or user).
+	ErrInstallationNotFound = errors.New("installation not found for owner")
 )
 
 // NetworkError represents a network-level error (retryable).
