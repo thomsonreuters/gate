@@ -348,52 +348,50 @@ func TestLayer2_TrustPolicyFileNotFound(t *testing.T) {
 	assert.Equal(t, "trust policy file not found in repository", result.DenyReason.Message)
 }
 
-func TestLayer2_RepositoryNotFound(t *testing.T) {
+func TestLayer2_RepositoryOrInstallationNotFound(t *testing.T) {
 	t.Parallel()
-	cfg := baseConfig(nil)
 
-	app := selector.App{ClientID: "client-1", Organization: "example-org"}
-	sel, _ := selector.NewSelector([]selector.App{app}, backends.NewMemoryStore())
+	tests := []struct {
+		name             string
+		fetchErr         error
+		targetRepository string
+	}{
+		{
+			name:             "repository_not_found",
+			fetchErr:         fmt.Errorf("getting installation ID: %w: example-org/missing-repo", github.ErrRepositoryNotFound),
+			targetRepository: "example-org/missing-repo",
+		},
+		{
+			name:             "installation_not_found",
+			fetchErr:         fmt.Errorf("getting installation ID: %w: example-org", github.ErrInstallationNotFound),
+			targetRepository: "example-org/some-repo",
+		},
+	}
 
-	m := &github.MockClient{}
-	m.On("GetContents", mock.Anything, mock.Anything, mock.Anything).
-		Return(nil, fmt.Errorf("getting installation ID: %w: example-org/missing-repo", github.ErrRepositoryNotFound))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := baseConfig(nil)
 
-	a, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m}, slog.Default())
-	require.NoError(t, err)
+			app := selector.App{ClientID: "client-1", Organization: "example-org"}
+			sel, _ := selector.NewSelector([]selector.App{app}, backends.NewMemoryStore())
 
-	result := a.Authorize(t.Context(), &Request{
-		Claims:           mainBranchClaims(),
-		Issuer:           testIssuer,
-		TargetRepository: "example-org/missing-repo",
-	})
-	assert.False(t, result.Allowed)
-	assert.Equal(t, ErrRepositoryNotFound, result.DenyReason.Code)
-	assert.Equal(t, "repository not found or not accessible", result.DenyReason.Message)
-}
+			m := &github.MockClient{}
+			m.On("GetContents", mock.Anything, mock.Anything, mock.Anything).Return(nil, tt.fetchErr)
 
-func TestLayer2_InstallationNotFound(t *testing.T) {
-	t.Parallel()
-	cfg := baseConfig(nil)
+			a, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m}, slog.Default())
+			require.NoError(t, err)
 
-	app := selector.App{ClientID: "client-1", Organization: "example-org"}
-	sel, _ := selector.NewSelector([]selector.App{app}, backends.NewMemoryStore())
-
-	m := &github.MockClient{}
-	m.On("GetContents", mock.Anything, mock.Anything, mock.Anything).
-		Return(nil, fmt.Errorf("getting installation ID: %w: example-org", github.ErrInstallationNotFound))
-
-	a, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m}, slog.Default())
-	require.NoError(t, err)
-
-	result := a.Authorize(t.Context(), &Request{
-		Claims:           mainBranchClaims(),
-		Issuer:           testIssuer,
-		TargetRepository: "example-org/some-repo",
-	})
-	assert.False(t, result.Allowed)
-	assert.Equal(t, ErrRepositoryNotFound, result.DenyReason.Code)
-	assert.Equal(t, "repository not found or not accessible", result.DenyReason.Message)
+			result := a.Authorize(t.Context(), &Request{
+				Claims:           mainBranchClaims(),
+				Issuer:           testIssuer,
+				TargetRepository: tt.targetRepository,
+			})
+			assert.False(t, result.Allowed)
+			assert.Equal(t, ErrRepositoryNotFound, result.DenyReason.Code)
+			assert.Equal(t, "repository not found or not accessible", result.DenyReason.Message)
+		})
+	}
 }
 
 func TestLayer2_ExplicitPolicyName(t *testing.T) {

@@ -718,7 +718,7 @@ func TestGetContents_StaleTokenEviction(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 12345})
 		case strings.Contains(r.URL.Path, "/access_tokens"):
 			tokenCreations.Add(1)
-			_ = json.NewEncoder(w).Encode(map[string]any{ //nolint:gosec // G101: test fixture
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"token":      "ghs_fresh",
 				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
 			})
