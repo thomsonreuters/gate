@@ -42,7 +42,8 @@ func (m *mockService) Exchange(_ context.Context, _ string, _ *sts.ExchangeReque
 
 func TestNewExchangeHandler(t *testing.T) {
 	t.Parallel()
-	h := NewExchangeHandler(&mockService{})
+	h, hErr := NewExchangeHandler(&mockService{})
+	require.NoError(t, hErr)
 	require.NotNil(t, h)
 }
 
@@ -63,7 +64,8 @@ func TestHTTPStatusCode(t *testing.T) {
 
 func TestExchange_MissingInput(t *testing.T) {
 	t.Parallel()
-	h := NewExchangeHandler(&mockService{})
+	h, hErr := NewExchangeHandler(&mockService{})
+	require.NoError(t, hErr)
 
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/exchange", nil)
 	w := httptest.NewRecorder()
@@ -89,7 +91,8 @@ func TestExchange_Success(t *testing.T) {
 			RequestID:     "req-123",
 		},
 	}
-	h := NewExchangeHandler(svc)
+	h, hErr := NewExchangeHandler(svc)
+	require.NoError(t, hErr)
 
 	input := &ExchangeInput{
 		Body: sts.ExchangeRequest{
@@ -167,7 +170,8 @@ func TestExchange_ExchangeError(t *testing.T) {
 			t.Parallel()
 
 			svc := &mockService{err: tt.err}
-			h := NewExchangeHandler(svc)
+			h, hErr := NewExchangeHandler(svc)
+	require.NoError(t, hErr)
 
 			input := &ExchangeInput{
 				Body: sts.ExchangeRequest{OIDCToken: "tok", TargetRepository: "org/repo"},
@@ -200,7 +204,8 @@ func TestExchange_RateLimitedWithRetryAfter(t *testing.T) {
 			RetryAfterSeconds: 60,
 		},
 	}
-	h := NewExchangeHandler(svc)
+	h, hErr := NewExchangeHandler(svc)
+	require.NoError(t, hErr)
 
 	input := &ExchangeInput{
 		Body: sts.ExchangeRequest{OIDCToken: "tok", TargetRepository: "org/repo"},
@@ -220,7 +225,8 @@ func TestExchange_NonExchangeError(t *testing.T) {
 	t.Parallel()
 
 	svc := &mockService{err: errors.New("unexpected")}
-	h := NewExchangeHandler(svc)
+	h, hErr := NewExchangeHandler(svc)
+	require.NoError(t, hErr)
 
 	input := &ExchangeInput{
 		Body: sts.ExchangeRequest{OIDCToken: "tok", TargetRepository: "org/repo"},

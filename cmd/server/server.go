@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ggicci/httpin"
 	httpin_integration "github.com/ggicci/httpin/integration"
@@ -32,13 +33,21 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog/v3"
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/thomsonreuters/gate/cmd/server/handlers"
 	"github.com/thomsonreuters/gate/cmd/server/middlewares"
 	"github.com/thomsonreuters/gate/internal/config"
+	"github.com/thomsonreuters/gate/internal/constants"
+	"github.com/thomsonreuters/gate/internal/logger"
+	"github.com/thomsonreuters/gate/internal/telemetry"
 )
 
 const (
 	healthPath = "/health"
+	// maxBodyBytes caps the size of any incoming request body to defend
+	// against payload-exhaustion DoS attempts.
+	maxBodyBytes = 1 << 20 // 1 MB
 )
 
 // Server is the main HTTP server.
@@ -59,16 +68,36 @@ func NewServer(ctx context.Context, config *config.Config) *Server {
 
 // Init initializes the HTTP server with routes, middleware, and configuration.
 func (s *Server) Init() error {
+	otelShutdown, err := telemetry.Init(s.ctx, &s.cfg.OTel)
+	if err != nil {
+		return fmt.Errorf("initializing telemetry: %w", err)
+	}
+
+	logger.SetGlobalLogger(s.cfg.Logger.Level, s.cfg.Logger.Format, s.cfg.OTel.Enabled)
+
 	service, closers, err := s.buildDependencies()
 	if err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = otelShutdown(ctx)
 		return fmt.Errorf("building dependencies: %w", err)
 	}
-	s.closers = closers
+	s.closers = append(s.closers, closers...)
+	s.closers = append(s.closers, otelShutdownCloser(otelShutdown))
 
 	infoHandler := handlers.NewInfoHandler()
-	exchangeHandler := handlers.NewExchangeHandler(service)
+	exchangeHandler, err := handlers.NewExchangeHandler(service)
+	if err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = otelShutdown(ctx)
+		return fmt.Errorf("building exchange handler: %w", err)
+	}
 
 	s.router = chi.NewRouter()
+	s.router.Use(middleware.Heartbeat(healthPath))
+	s.router.Use(otelhttp.NewMiddleware(constants.ProgramIdentifier))
+	s.router.Use(middlewares.ChiRouteLabeler)
 	s.router.Use(middleware.RequestID)
 	s.router.Use(middleware.RealIP)
 	s.router.Use(httplog.RequestLogger(slog.Default(), &httplog.Options{
@@ -81,7 +110,7 @@ func (s *Server) Init() error {
 	s.router.Use(middleware.Timeout(s.cfg.Server.RequestTimeout))
 	s.router.Use(middleware.StripSlashes)
 	s.router.Use(middleware.CleanPath)
-	s.router.Use(middleware.Heartbeat(healthPath))
+	s.router.Use(middleware.RequestSize(maxBodyBytes))
 	s.router.Use(middlewares.SecurityHeaders)
 
 	s.router.Route("/api/v1", func(r chi.Router) {
@@ -185,4 +214,15 @@ var ServerCmd = &cobra.Command{
 
 func init() {
 	httpin_integration.UseGochiURLParam("path", chi.URLParam)
+}
+
+// otelShutdownCloser adapts an OTel-style ctx-taking shutdown function into the
+// server's plain func() error closer slice, applying a fixed timeout.
+func otelShutdownCloser(fn func(context.Context) error) func() error {
+	return func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		slog.DebugContext(ctx, "Running OTel shutdown closer")
+		return fn(ctx)
+	}
 }
