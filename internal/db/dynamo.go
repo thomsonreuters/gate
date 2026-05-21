@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 )
 
 // DynamoDBAPI defines the subset of DynamoDB operations used by the application.
@@ -72,6 +74,9 @@ func NewDynamoDB(ctx context.Context, region string) (*dynamodb.Client, error) {
 	if err != nil {
 		return nil, errors.Join(ErrDynamoDBLoadConfig, err)
 	}
+
+	otelaws.AppendMiddlewares(&cfg.APIOptions)
+	slog.DebugContext(ctx, "AWS SDK otelaws middlewares appended")
 
 	dynamoDBInstance = dynamodb.NewFromConfig(cfg)
 	dynamoRegion = region

@@ -19,7 +19,9 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 
+	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/thomsonreuters/gate/internal/config"
 	"github.com/thomsonreuters/gate/internal/db"
@@ -41,7 +43,19 @@ func NewStore(ctx context.Context, cfg *config.Config) (selector.Store, error) {
 		if redisCfg.TLS {
 			opts.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
-		return NewRedisStore(redis.NewClient(opts)), nil
+		client := redis.NewClient(opts)
+		if err := redisotel.InstrumentTracing(client); err != nil {
+			return nil, fmt.Errorf("instrumenting redis tracing: %w", err)
+		}
+		if err := redisotel.InstrumentMetrics(client); err != nil {
+			return nil, fmt.Errorf("instrumenting redis metrics: %w", err)
+		}
+		slog.DebugContext(ctx, "Redis OTel tracing and metrics instrumented",
+			slog.String("addr", redisCfg.Address),
+			slog.Int("db", redisCfg.DB),
+			slog.Bool("tls", redisCfg.TLS),
+		)
+		return NewRedisStore(client), nil
 	case config.SelectorStoreTypeDynamoDB:
 		client, err := db.NewDynamoDB(ctx, cfg.AWSRegion)
 		if err != nil {

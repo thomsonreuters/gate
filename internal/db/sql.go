@@ -20,6 +20,8 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -30,6 +32,7 @@ import (
 	"github.com/thomsonreuters/gate/internal/logger"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/plugin/opentelemetry/tracing"
 )
 
 const (
@@ -89,6 +92,11 @@ func NewDB(ctx context.Context, dsn string, databaseType config.AuditBackendType
 	if err != nil {
 		return nil, err
 	}
+
+	if err := db.Use(tracing.NewPlugin()); err != nil {
+		return nil, fmt.Errorf("registering gorm otel plugin: %w", err)
+	}
+	slog.DebugContext(ctx, "GORM OTel tracing plugin registered")
 
 	db = db.WithContext(ctx)
 	instance = db
