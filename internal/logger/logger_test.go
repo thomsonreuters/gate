@@ -82,10 +82,10 @@ func TestLogFormat_String(t *testing.T) {
 func TestSetGlobalLogger(t *testing.T) {
 	ctx := t.Context()
 
-	SetGlobalLogger(LogLevelDebug, LogFormatJSON)
+	SetGlobalLogger(LogLevelDebug, LogFormatJSON, false)
 	assert.True(t, slog.Default().Enabled(ctx, slog.LevelDebug))
 
-	SetGlobalLogger(LogLevelError, LogFormatText)
+	SetGlobalLogger(LogLevelError, LogFormatText, false)
 	assert.False(t, slog.Default().Enabled(ctx, slog.LevelDebug))
 	assert.True(t, slog.Default().Enabled(ctx, slog.LevelError))
 
