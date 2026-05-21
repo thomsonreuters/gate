@@ -23,11 +23,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/lestrrat-go/jwx/v2/jwt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var (
@@ -131,6 +133,10 @@ func (o *Validator) provider(ctx context.Context, issuer string) (*gooidc.Provid
 		}
 		return provider, nil
 	}
+
+	ctx = gooidc.ClientContext(ctx, &http.Client{
+		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	})
 
 	p, err := gooidc.NewProvider(ctx, issuer)
 	if err != nil {

@@ -37,6 +37,10 @@ import (
 	"github.com/thomsonreuters/gate/internal/sts/oidc"
 	"github.com/thomsonreuters/gate/internal/sts/selector"
 	"github.com/thomsonreuters/gate/internal/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -99,6 +103,7 @@ type Service struct {
 	cancelRevoke context.CancelFunc
 	maxTTL       int
 	logger       *slog.Logger
+	tracer       trace.Tracer
 }
 
 // Dependencies holds external dependencies that cannot be derived from config alone.
@@ -154,6 +159,7 @@ func NewService(cfg *config.Config, dependencies Dependencies) (*Service, error)
 		cancelRevoke: cancelRevoke,
 		maxTTL:       cfg.Policy.MaxTokenTTL,
 		logger:       dependencies.Logger,
+		tracer:       otel.GetTracerProvider().Tracer("sts"),
 	}
 
 	svc.runRevocationLoop(revokeCtx)
@@ -201,8 +207,13 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}
 	}
 
-	claims, err := s.oidc.Validate(ctx, req.OIDCToken)
+	validateCtx, validateSpan := s.tracer.Start(ctx, "ValidateOIDC")
+	defer validateSpan.End()
+	claims, err := s.oidc.Validate(validateCtx, req.OIDCToken)
 	if err != nil {
+		validateSpan.RecordError(err)
+		validateSpan.SetStatus(codes.Error, "oidc validation failed")
+		validateSpan.End()
 		return nil, &ExchangeError{
 			Code:      ErrInvalidToken,
 			Message:   "OIDC token validation failed",
@@ -210,6 +221,8 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 			RequestID: requestID,
 		}
 	}
+	validateSpan.SetAttributes(attribute.String("issuer", claims.Issuer))
+	validateSpan.End()
 
 	authReq := &authorizer.Request{
 		Claims:               claimsToMap(claims),
@@ -220,8 +233,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		RequestedTTL:         req.RequestedTTL,
 	}
 
-	result := s.authorizer.Authorize(ctx, authReq)
+	authCtx, authSpan := s.tracer.Start(ctx, "EvaluatePolicy")
+	defer authSpan.End()
+	result := s.authorizer.Authorize(authCtx, authReq)
 	if !result.Allowed {
+		authSpan.SetStatus(codes.Error, string(result.DenyReason.Code))
+		authSpan.End()
 		s.auditDenied(ctx, requestID, claims, req, string(result.DenyReason.Code))
 		return nil, &ExchangeError{
 			Code:      string(result.DenyReason.Code),
@@ -230,9 +247,16 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 			RequestID: requestID,
 		}
 	}
+	authSpan.SetAttributes(attribute.String("matched_policy", result.MatchedPolicy))
+	authSpan.End()
 
-	app, err := s.selector.SelectApp(ctx, req.TargetRepository)
+	selectCtx, selectSpan := s.tracer.Start(ctx, "SelectApp")
+	defer selectSpan.End()
+	app, err := s.selector.SelectApp(selectCtx, req.TargetRepository)
 	if err != nil {
+		selectSpan.RecordError(err)
+		selectSpan.SetStatus(codes.Error, "app selection failed")
+		selectSpan.End()
 		if exhausted, ok := errors.AsType[*selector.ExhaustedError](err); ok {
 			s.auditDenied(ctx, requestID, claims, req, ErrRateLimited)
 			return nil, &ExchangeError{
@@ -250,6 +274,8 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 			RequestID: requestID,
 		}
 	}
+	selectSpan.SetAttributes(attribute.String("client_id", app.ClientID))
+	selectSpan.End()
 
 	client, ok := s.clients[app.ClientID]
 	if !ok {
@@ -262,11 +288,16 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}
 	}
 
-	tokenResp, err := client.RequestToken(ctx, &github.TokenRequest{
+	mintCtx, mintSpan := s.tracer.Start(ctx, "MintInstallationToken")
+	defer mintSpan.End()
+	tokenResp, err := client.RequestToken(mintCtx, &github.TokenRequest{
 		Repository:  req.TargetRepository,
 		Permissions: result.EffectivePermissions,
 	})
 	if err != nil {
+		mintSpan.RecordError(err)
+		mintSpan.SetStatus(codes.Error, "github token request failed")
+		mintSpan.End()
 		s.auditDenied(ctx, requestID, claims, req, ErrGitHubAPIError)
 		return nil, &ExchangeError{
 			Code:      ErrGitHubAPIError,
@@ -275,6 +306,7 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 			RequestID: requestID,
 		}
 	}
+	mintSpan.End()
 
 	rateInfo, err := client.RateLimit(ctx, tokenResp.Token)
 	if err != nil {

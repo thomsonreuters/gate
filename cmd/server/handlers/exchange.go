@@ -26,7 +26,6 @@ import (
 	"github.com/ggicci/httpin"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/render"
-	"github.com/thomsonreuters/gate/internal/constants"
 	"github.com/thomsonreuters/gate/internal/sts"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -59,9 +58,7 @@ type ErrorResponse struct {
 // NewExchangeHandler creates an ExchangeHandler with the given STS service.
 // It pulls a tracer and meters from the global OTel providers
 func NewExchangeHandler(service sts.Exchanger) (*ExchangeHandler, error) {
-	scopeName := constants.ProgramIdentifier + "/handlers/exchange"
-
-	meter := otel.GetMeterProvider().Meter(scopeName)
+	meter := otel.GetMeterProvider().Meter("exchange")
 	counter, err := meter.Int64Counter("token_exchange_total",
 		metric.WithDescription("Token exchange requests by outcome"))
 	if err != nil {
@@ -77,7 +74,7 @@ func NewExchangeHandler(service sts.Exchanger) (*ExchangeHandler, error) {
 
 	return &ExchangeHandler{
 		service:          service,
-		tracer:           otel.GetTracerProvider().Tracer(scopeName),
+		tracer:           otel.GetTracerProvider().Tracer("exchange"),
 		exchangeCount:    counter,
 		exchangeDuration: histogram,
 	}, nil

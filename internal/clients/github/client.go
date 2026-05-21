@@ -32,6 +32,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	gogithub "github.com/google/go-github/v83/github"
 	"github.com/thomsonreuters/gate/internal/utils"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -399,7 +400,7 @@ func newClient(opts Options) (ClientIface, error) {
 	}
 
 	transport := &retryTransport{
-		next: http.DefaultTransport,
+		next: otelhttp.NewTransport(http.DefaultTransport),
 		cfg:  DefaultRetryConfig,
 	}
 
