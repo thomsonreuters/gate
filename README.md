@@ -10,13 +10,14 @@ Modern CI/CD pipelines and automation workflows frequently require access to Git
 - [2. Key capabilities](#key-capabilities)
 - [3. Getting started](#getting-started)
 - [4. Configuration](#configuration)
-- [5. API reference](#api-reference)
-- [6. Development](#development)
-- [7. Deployment](#deployment)
-- [8. FIPS 140-3 compliance](#fips-140-3-compliance)
-- [9. Security considerations](#security-considerations)
-- [10. Contributing](#contributing)
-- [11. License](#license)
+- [5. Observability](#observability)
+- [6. API reference](#api-reference)
+- [7. Development](#development)
+- [8. Deployment](#deployment)
+- [9. FIPS 140-3 compliance](#fips-140-3-compliance)
+- [10. Security considerations](#security-considerations)
+- [11. Contributing](#contributing)
+- [12. License](#license)
 
 ## How it works
 
@@ -240,6 +241,47 @@ origin:
 ```
 
 The shared secret is injected via the `GATE_ORIGIN_HEADER_VALUE` environment variable. See the [Helm chart documentation](deployments/helm/gate/README.md) for Kubernetes configuration and the [Terraform modules](deployments/terraform/modules/aws/README.md) for CloudFront setup.
+
+## Observability
+
+GATE has built-in OpenTelemetry instrumentation for traces, metrics, and logs, exported via OTLP/gRPC. It is **disabled by default**; enable it via the `otel:` config block or `GATE_OTEL_*` environment variables.
+
+### What is instrumented
+
+- **HTTP server**: every request to `/api/v1/*` produces a span (`otelhttp.NewMiddleware`) with the matched chi route as `http.route`.
+- **Outbound HTTP**: GitHub API and OIDC discovery/JWKS calls.
+- **Database**: PostgreSQL (via `gorm.io/plugin/opentelemetry/tracing`) and DynamoDB (via `otelaws`).
+- **Redis**: traces and metrics via `redisotel`.
+- **Manual spans**: `TokenExchange` (handler), and `ValidateOIDC`, `EvaluatePolicy`, `SelectApp`, `MintInstallationToken` (service).
+- **Metrics**: `gate_token_exchange_total{outcome}`, `gate_token_exchange_duration_seconds`, plus Go runtime metrics.
+- **Logs**: when enabled, slog records are exported via OTLP **in addition to** stdout. Records always carry `trace_id` and `span_id` when emitted inside an active span.
+
+### Configuration
+
+| Key | Env var | Default | Notes |
+|---|---|---|---|
+| `otel.enabled` | `GATE_OTEL_ENABLED` | `false` | Master switch. |
+| `otel.service_name` | `GATE_OTEL_SERVICE_NAME` | `gate` | Becomes `service.name` resource attr. |
+| `otel.endpoint` | `GATE_OTEL_ENDPOINT` | `localhost:4317` | OTLP/gRPC collector. |
+| `otel.protocol` | `GATE_OTEL_PROTOCOL` | `grpc` | Only `grpc` supported. |
+| `otel.insecure` | `GATE_OTEL_INSECURE` | `true` | Disable TLS to collector. Set to `false` in production. |
+| `otel.sample_rate` | `GATE_OTEL_SAMPLE_RATE` | `1.0` | Trace sampler ratio (0.0-1.0). |
+
+### Local development
+
+The local compose stack ships with [Microsoft Aspire Dashboard](https://learn.microsoft.com/en-us/dotnet/aspire/fundamentals/dashboard/overview) — a single image that bundles an OTLP receiver and a web UI for browsing traces, metrics, and logs.
+
+```bash
+# Start the dashboard (OTLP/gRPC on :4317, UI on :18888)
+docker compose -f local/compose.dev.yml up aspire-dashboard -d
+
+# Run gate with OTel env vars sourced
+set -a; source local/otel.env; set +a
+go run . server -c config.yaml
+
+# Open the dashboard
+open http://localhost:18888
+```
 
 ## API reference
 
