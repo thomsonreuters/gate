@@ -15,6 +15,7 @@
 package config
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,7 +30,7 @@ func TestOTelConfig_Validate_DisabledIsAlwaysValid(t *testing.T) {
 
 func TestOTelConfig_Validate_EnabledRequiresEndpoint(t *testing.T) {
 	t.Parallel()
-	c := &OTelConfig{Enabled: true, Protocol: "grpc", SampleRate: 1.0}
+	c := &OTelConfig{Enabled: true, Protocol: "grpc", SampleRate: 1.0, ExporterTimeout: DefaultOTelExporterTimeout}
 	err := c.Validate()
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrOTelEndpointRequired)
@@ -37,7 +38,7 @@ func TestOTelConfig_Validate_EnabledRequiresEndpoint(t *testing.T) {
 
 func TestOTelConfig_Validate_EnabledRejectsNonGRPCProtocol(t *testing.T) {
 	t.Parallel()
-	c := &OTelConfig{Enabled: true, Endpoint: "localhost:4317", Protocol: "http", SampleRate: 1.0}
+	c := &OTelConfig{Enabled: true, Endpoint: "localhost:4317", Protocol: "http", SampleRate: 1.0, ExporterTimeout: DefaultOTelExporterTimeout}
 	err := c.Validate()
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrOTelInvalidProtocol)
@@ -45,9 +46,9 @@ func TestOTelConfig_Validate_EnabledRejectsNonGRPCProtocol(t *testing.T) {
 
 func TestOTelConfig_Validate_SampleRateRange(t *testing.T) {
 	t.Parallel()
-	base := OTelConfig{Enabled: true, Endpoint: "localhost:4317", Protocol: "grpc"}
+	base := OTelConfig{Enabled: true, Endpoint: "localhost:4317", Protocol: "grpc", ExporterTimeout: DefaultOTelExporterTimeout}
 
-	for _, rate := range []float64{-0.1, 1.1} {
+	for _, rate := range []float64{-0.1, 1.1, math.NaN()} {
 		c := base
 		c.SampleRate = rate
 		assert.ErrorIs(t, c.Validate(), ErrOTelInvalidSampleRate)
@@ -57,4 +58,21 @@ func TestOTelConfig_Validate_SampleRateRange(t *testing.T) {
 		c.SampleRate = rate
 		assert.NoError(t, c.Validate())
 	}
+}
+
+func TestOTelConfig_Validate_ExporterTimeout(t *testing.T) {
+	t.Parallel()
+	base := OTelConfig{Enabled: true, Endpoint: "localhost:4317", Protocol: "grpc", SampleRate: 1.0}
+
+	c := base
+	c.ExporterTimeout = 0
+	assert.ErrorIs(t, c.Validate(), ErrOTelInvalidExporterTimeout)
+
+	c = base
+	c.ExporterTimeout = -1
+	assert.ErrorIs(t, c.Validate(), ErrOTelInvalidExporterTimeout)
+
+	c = base
+	c.ExporterTimeout = DefaultOTelExporterTimeout
+	assert.NoError(t, c.Validate())
 }

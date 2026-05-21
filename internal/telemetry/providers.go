@@ -32,6 +32,7 @@ import (
 func newLoggerProvider(ctx context.Context, cfg *config.OTelConfig, res *resource.Resource) (*sdklog.LoggerProvider, error) {
 	opts := []otlploggrpc.Option{
 		otlploggrpc.WithEndpoint(cfg.Endpoint),
+		otlploggrpc.WithTimeout(cfg.ExporterTimeout),
 	}
 	if cfg.Insecure {
 		opts = append(opts, otlploggrpc.WithInsecure())
@@ -53,6 +54,7 @@ func newLoggerProvider(ctx context.Context, cfg *config.OTelConfig, res *resourc
 func newMeterProvider(ctx context.Context, cfg *config.OTelConfig, res *resource.Resource) (*sdkmetric.MeterProvider, error) {
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
+		otlpmetricgrpc.WithTimeout(cfg.ExporterTimeout),
 	}
 	if cfg.Insecure {
 		opts = append(opts, otlpmetricgrpc.WithInsecure())
@@ -75,6 +77,7 @@ func newMeterProvider(ctx context.Context, cfg *config.OTelConfig, res *resource
 func newTracerProvider(ctx context.Context, cfg *config.OTelConfig, res *resource.Resource) (*sdktrace.TracerProvider, error) {
 	opts := []otlptracegrpc.Option{
 		otlptracegrpc.WithEndpoint(cfg.Endpoint),
+		otlptracegrpc.WithTimeout(cfg.ExporterTimeout),
 	}
 	if cfg.Insecure {
 		opts = append(opts, otlptracegrpc.WithInsecure())

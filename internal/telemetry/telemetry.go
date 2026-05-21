@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 
 	"github.com/thomsonreuters/gate/internal/config"
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
@@ -43,6 +44,10 @@ func Init(ctx context.Context, cfg *config.OTelConfig) (func(context.Context) er
 		slog.Bool("insecure", cfg.Insecure),
 		slog.Float64("sample_rate", cfg.SampleRate),
 	)
+
+	if err := probeCollector(ctx, cfg); err != nil {
+		return nil, fmt.Errorf("OTel collector unreachable at %s: %w", cfg.Endpoint, err)
+	}
 
 	res, err := newResource(cfg)
 	if err != nil {
@@ -111,4 +116,19 @@ func Init(ctx context.Context, cfg *config.OTelConfig) (func(context.Context) er
 		}
 		return errors.Join(errs...)
 	}, nil
+}
+
+// probeCollector does a TCP dial to the collector endpoint to fail fast on
+// misconfiguration.
+func probeCollector(ctx context.Context, cfg *config.OTelConfig) error {
+	dialCtx, cancel := context.WithTimeout(ctx, cfg.ExporterTimeout)
+	defer cancel()
+
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", cfg.Endpoint)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	slog.DebugContext(ctx, "OTel collector reachable", slog.String("endpoint", cfg.Endpoint))
+	return nil
 }

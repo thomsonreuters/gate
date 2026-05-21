@@ -15,7 +15,10 @@
 package telemetry
 
 import (
+	"fmt"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +33,47 @@ func TestInit_DisabledReturnsNoopShutdown(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, shutdown)
 
-	// Calling no-op shutdown must succeed.
 	assert.NoError(t, shutdown(ctx))
+}
+
+func TestProbeCollector_Reachable(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	cfg := &config.OTelConfig{
+		Endpoint:        ln.Addr().String(),
+		ExporterTimeout: 2 * time.Second,
+	}
+	assert.NoError(t, probeCollector(t.Context(), cfg))
+}
+
+func TestProbeCollector_Unreachable(t *testing.T) {
+	t.Parallel()
+
+	// Use a port that is almost certainly not listening.
+	cfg := &config.OTelConfig{
+		Endpoint:        "127.0.0.1:1",
+		ExporterTimeout: 500 * time.Millisecond,
+	}
+	assert.Error(t, probeCollector(t.Context(), cfg))
+}
+
+func TestInit_FailsWhenCollectorUnreachable(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.OTelConfig{
+		Enabled:         true,
+		Endpoint:        "127.0.0.1:1",
+		Protocol:        "grpc",
+		SampleRate:      1.0,
+		ExporterTimeout: 500 * time.Millisecond,
+	}
+
+	shutdown, err := Init(t.Context(), cfg)
+	require.Error(t, err)
+	assert.Nil(t, shutdown)
+	assert.Contains(t, err.Error(), fmt.Sprintf("OTel collector unreachable at %s", cfg.Endpoint))
 }

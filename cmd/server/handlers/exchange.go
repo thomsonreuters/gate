@@ -112,6 +112,12 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	outcome := "ok"
 	defer func() {
+		if r := recover(); r != nil {
+			outcome = "panic"
+			panic(r)
+		}
+	}()
+	defer func() {
 		h.exchangeDuration.Record(ctx, time.Since(start).Seconds())
 		h.exchangeCount.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
 	}()
@@ -134,7 +140,10 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	span.SetAttributes(attribute.String("matched_policy", response.MatchedPolicy))
+	span.SetAttributes(
+		attribute.String("matched_policy", response.MatchedPolicy),
+	)
+
 	render.Status(r, http.StatusOK)
 	render.JSON(w, r, response)
 }

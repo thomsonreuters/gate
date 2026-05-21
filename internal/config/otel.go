@@ -16,6 +16,8 @@ package config
 
 import (
 	"errors"
+	"math"
+	"time"
 )
 
 const (
@@ -31,6 +33,8 @@ const (
 	KeyOTelInsecure = "otel.insecure"
 	// KeyOTelSampleRate is the Viper key for the trace sampler ratio (0.0-1.0).
 	KeyOTelSampleRate = "otel.sample_rate"
+	// KeyOTelExporterTimeout is the Viper key for the OTLP exporter timeout.
+	KeyOTelExporterTimeout = "otel.exporter_timeout"
 
 	// DefaultOTelServiceName is the default service.name when not set.
 	DefaultOTelServiceName = "gate"
@@ -38,10 +42,12 @@ const (
 	DefaultOTelEndpoint = "localhost:4317"
 	// DefaultOTelProtocol is the only supported OTLP transport.
 	DefaultOTelProtocol = "grpc"
-	// DefaultOTelInsecure disables TLS by default for local collectors.
-	DefaultOTelInsecure = true
+	// DefaultOTelInsecure requires explicit opt-in to plaintext connections.
+	DefaultOTelInsecure = false
 	// DefaultOTelSampleRate is the default trace sampler ratio.
 	DefaultOTelSampleRate = 1.0
+	// DefaultOTelExporterTimeout is the default OTLP exporter timeout.
+	DefaultOTelExporterTimeout = 10 * time.Second
 )
 
 var (
@@ -51,16 +57,19 @@ var (
 	ErrOTelInvalidProtocol = errors.New("otel protocol must be \"grpc\"")
 	// ErrOTelInvalidSampleRate is returned when otel.sample_rate is outside [0, 1].
 	ErrOTelInvalidSampleRate = errors.New("otel sample_rate must be between 0.0 and 1.0")
+	// ErrOTelInvalidExporterTimeout is returned when otel.exporter_timeout is not positive.
+	ErrOTelInvalidExporterTimeout = errors.New("otel exporter_timeout must be positive")
 )
 
 // OTelConfig holds OpenTelemetry exporter and sampler configuration.
 type OTelConfig struct {
-	Enabled     bool    `mapstructure:"enabled"`
-	ServiceName string  `mapstructure:"service_name"`
-	Endpoint    string  `mapstructure:"endpoint"`
-	Protocol    string  `mapstructure:"protocol"`
-	Insecure    bool    `mapstructure:"insecure"`
-	SampleRate  float64 `mapstructure:"sample_rate"`
+	Enabled         bool          `mapstructure:"enabled"`
+	ServiceName     string        `mapstructure:"service_name"`
+	Endpoint        string        `mapstructure:"endpoint"`
+	Protocol        string        `mapstructure:"protocol"`
+	Insecure        bool          `mapstructure:"insecure"`
+	SampleRate      float64       `mapstructure:"sample_rate"`
+	ExporterTimeout time.Duration `mapstructure:"exporter_timeout"`
 }
 
 // Validate validates OTel configuration. When disabled, all fields are accepted.
@@ -74,8 +83,11 @@ func (o *OTelConfig) Validate() error {
 	if o.Protocol != DefaultOTelProtocol {
 		return ErrOTelInvalidProtocol
 	}
-	if o.SampleRate < 0.0 || o.SampleRate > 1.0 {
+	if o.SampleRate < 0.0 || o.SampleRate > 1.0 || math.IsNaN(o.SampleRate) {
 		return ErrOTelInvalidSampleRate
+	}
+	if o.ExporterTimeout <= 0 {
+		return ErrOTelInvalidExporterTimeout
 	}
 	return nil
 }

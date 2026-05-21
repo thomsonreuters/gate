@@ -94,6 +94,7 @@ otel:
   protocol: grpc
   insecure: false
   sample_rate: 0.25
+  exporter_timeout: 15s
 
 github_apps:
   - client_id: "Iv1.prod123"

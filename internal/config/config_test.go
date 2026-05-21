@@ -138,7 +138,7 @@ func TestConfig_Validate(t *testing.T) {
 		{
 			name: "invalid_otel",
 			modify: func(c *Config) {
-				c.OTel = OTelConfig{Enabled: true, Endpoint: "", Protocol: "grpc", SampleRate: 1.0}
+				c.OTel = OTelConfig{Enabled: true, Endpoint: "", Protocol: "grpc", SampleRate: 1.0, ExporterTimeout: DefaultOTelExporterTimeout}
 			},
 			fails: ErrOTelEndpointRequired,
 		},
@@ -395,6 +395,7 @@ func TestLoad_FullConfig(t *testing.T) {
 	assert.True(t, cfg.OTel.Enabled)
 	assert.Equal(t, "gate-prod", cfg.OTel.ServiceName)
 	assert.InDelta(t, 0.25, cfg.OTel.SampleRate, 0.001)
+	assert.Equal(t, 15*time.Second, cfg.OTel.ExporterTimeout)
 
 	require.Len(t, cfg.GitHubApps, 1)
 	assert.Equal(t, "example-org", cfg.GitHubApps[0].Organization)

@@ -202,7 +202,7 @@ func bindEnv(v *viper.Viper) {
 
 	mustBindEnv(v, KeyFIPSEnabled, KeyFIPSMode)
 
-	mustBindEnv(v, KeyOTelEnabled, KeyOTelServiceName, KeyOTelEndpoint, KeyOTelProtocol, KeyOTelInsecure, KeyOTelSampleRate)
+	mustBindEnv(v, KeyOTelEnabled, KeyOTelServiceName, KeyOTelEndpoint, KeyOTelProtocol, KeyOTelInsecure, KeyOTelSampleRate, KeyOTelExporterTimeout)
 
 	mustBindEnv(v, KeyAWSRegion)
 }
@@ -239,6 +239,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(KeyOTelProtocol, DefaultOTelProtocol)
 	v.SetDefault(KeyOTelInsecure, DefaultOTelInsecure)
 	v.SetDefault(KeyOTelSampleRate, DefaultOTelSampleRate)
+	v.SetDefault(KeyOTelExporterTimeout, DefaultOTelExporterTimeout)
 }
 
 // mustBindEnv binds each key to its environment variable; panics on failure.

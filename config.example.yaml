@@ -105,8 +105,9 @@ otel:
   # service_name: gate                # resource attribute service.name
   # endpoint: localhost:4317          # OTLP/gRPC collector endpoint
   # protocol: grpc                    # only "grpc" is supported
-  # insecure: true                    # disable TLS to the collector
+  # insecure: false                   # set true to disable TLS to the collector
   # sample_rate: 1.0                  # trace sampling ratio (0.0 to 1.0)
+  # exporter_timeout: 10s             # OTLP exporter timeout per batch flush
 
 github_apps:
   - client_id: <VALUE>
