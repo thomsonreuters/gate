@@ -18,6 +18,7 @@ package handlers
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -75,7 +76,7 @@ func NewExchangeHandler(service sts.Exchanger) (*ExchangeHandler, error) {
 	}
 
 	tokenIssued, err := meter.Int64Counter("token_issued_total",
-		metric.WithDescription("Tokens issued by repository and policy"))
+		metric.WithDescription("Tokens issued by repository"))
 	if err != nil {
 		return nil, fmt.Errorf("registering token issued counter: %w", err)
 	}
@@ -133,6 +134,9 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		r := recover()
 		if r != nil {
 			outcome = "panic"
+			span.SetStatus(codes.Error, "handler panic")
+			span.SetAttributes(attribute.String("panic.value", fmt.Sprintf("%v", r)))
+			slog.ErrorContext(ctx, "Exchange handler panic", slog.Any("panic", r))
 		}
 		h.exchangeDuration.Record(ctx, time.Since(start).Seconds())
 		h.exchangeCount.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))

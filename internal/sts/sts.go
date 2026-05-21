@@ -216,7 +216,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 	if err != nil {
 		validateSpan.RecordError(err)
 		validateSpan.SetStatus(codes.Error, "oidc validation failed")
-		validateSpan.End()
 		return nil, &ExchangeError{
 			Code:      ErrInvalidToken,
 			Message:   "OIDC token validation failed",
@@ -225,7 +224,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}
 	}
 	validateSpan.SetAttributes(attribute.String("issuer", claims.Issuer))
-	validateSpan.End()
 
 	authReq := &authorizer.Request{
 		Claims:               claimsToMap(claims),
@@ -241,7 +239,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 	result := s.authorizer.Authorize(authCtx, authReq)
 	if !result.Allowed {
 		authSpan.SetStatus(codes.Error, string(result.DenyReason.Code))
-		authSpan.End()
 		s.auditDenied(ctx, requestID, claims, req, string(result.DenyReason.Code))
 		return nil, (&ExchangeError{
 			Code:      string(result.DenyReason.Code),
@@ -251,7 +248,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 	authSpan.SetAttributes(attribute.String("matched_policy", result.MatchedPolicy))
-	authSpan.End()
 
 	selectCtx, selectSpan := s.tracer.Start(ctx, "SelectApp")
 	defer selectSpan.End()
@@ -259,7 +255,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 	if err != nil {
 		selectSpan.RecordError(err)
 		selectSpan.SetStatus(codes.Error, "app selection failed")
-		selectSpan.End()
 		if exhausted, ok := errors.AsType[*selector.ExhaustedError](err); ok {
 			s.auditDenied(ctx, requestID, claims, req, ErrRateLimited)
 			return nil, (&ExchangeError{
@@ -278,7 +273,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 	selectSpan.SetAttributes(attribute.String("client_id", app.ClientID))
-	selectSpan.End()
 
 	client, ok := s.clients[app.ClientID]
 	if !ok {
@@ -300,7 +294,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 	if err != nil {
 		mintSpan.RecordError(err)
 		mintSpan.SetStatus(codes.Error, "github token request failed")
-		mintSpan.End()
 		s.auditDenied(ctx, requestID, claims, req, ErrGitHubAPIError)
 		return nil, (&ExchangeError{
 			Code:      ErrGitHubAPIError,
@@ -309,7 +302,6 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 			RequestID: requestID,
 		}).WithCaller(claims.Issuer, claims.Subject)
 	}
-	mintSpan.End()
 
 	rateInfo, err := client.RateLimit(ctx, tokenResp.Token)
 	if err != nil {

@@ -253,7 +253,7 @@ GATE has built-in OpenTelemetry instrumentation for traces, metrics, and logs, e
 - **Database**: PostgreSQL (via `gorm.io/plugin/opentelemetry/tracing`) and DynamoDB (via `otelaws`).
 - **Redis**: traces and metrics via `redisotel`.
 - **Manual spans**: `TokenExchange` (handler), and `ValidateOIDC`, `EvaluatePolicy`, `SelectApp`, `MintInstallationToken` (service).
-- **Metrics**: `gate_token_exchange_total{outcome}`, `gate_token_exchange_duration_seconds`, plus Go runtime metrics.
+- **Metrics**: `token_exchange_total{outcome}`, `token_exchange_duration_seconds`, `token_issued_total{repository}`, `caller_exchange_total{sub,issuer,outcome}`, plus Go runtime metrics.
 - **Logs**: when enabled, slog records are exported via OTLP **in addition to** stdout. Records always carry `trace_id` and `span_id` when emitted inside an active span.
 
 ### Configuration
@@ -264,8 +264,9 @@ GATE has built-in OpenTelemetry instrumentation for traces, metrics, and logs, e
 | `otel.service_name` | `GATE_OTEL_SERVICE_NAME` | `gate` | Becomes `service.name` resource attr. |
 | `otel.endpoint` | `GATE_OTEL_ENDPOINT` | `localhost:4317` | OTLP/gRPC collector. |
 | `otel.protocol` | `GATE_OTEL_PROTOCOL` | `grpc` | Only `grpc` supported. |
-| `otel.insecure` | `GATE_OTEL_INSECURE` | `true` | Disable TLS to collector. Set to `false` in production. |
+| `otel.insecure` | `GATE_OTEL_INSECURE` | `false` | Disable TLS to collector. Set to `true` for local development. |
 | `otel.sample_rate` | `GATE_OTEL_SAMPLE_RATE` | `1.0` | Trace sampler ratio (0.0-1.0). |
+| `otel.exporter_timeout` | `GATE_OTEL_EXPORTER_TIMEOUT` | `10s` | OTLP exporter timeout per batch flush. |
 
 ### Local development
 
