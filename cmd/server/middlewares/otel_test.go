@@ -47,7 +47,7 @@ func TestChiRouteLabeler_AddsRoutePatternAttribute(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/42", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/users/42", nil)
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 

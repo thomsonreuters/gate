@@ -51,7 +51,7 @@ func TestOTelConfig_Validate_SampleRateRange(t *testing.T) {
 	for _, rate := range []float64{-0.1, 1.1, math.NaN()} {
 		c := base
 		c.SampleRate = rate
-		assert.ErrorIs(t, c.Validate(), ErrOTelInvalidSampleRate)
+		require.ErrorIs(t, c.Validate(), ErrOTelInvalidSampleRate)
 	}
 	for _, rate := range []float64{0.0, 0.5, 1.0} {
 		c := base
@@ -66,11 +66,11 @@ func TestOTelConfig_Validate_ExporterTimeout(t *testing.T) {
 
 	c := base
 	c.ExporterTimeout = 0
-	assert.ErrorIs(t, c.Validate(), ErrOTelInvalidExporterTimeout)
+	require.ErrorIs(t, c.Validate(), ErrOTelInvalidExporterTimeout)
 
 	c = base
 	c.ExporterTimeout = -1
-	assert.ErrorIs(t, c.Validate(), ErrOTelInvalidExporterTimeout)
+	require.ErrorIs(t, c.Validate(), ErrOTelInvalidExporterTimeout)
 
 	c = base
 	c.ExporterTimeout = DefaultOTelExporterTimeout

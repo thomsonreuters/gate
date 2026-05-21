@@ -33,14 +33,13 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog/v3"
 	"github.com/spf13/cobra"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-
 	"github.com/thomsonreuters/gate/cmd/server/handlers"
 	"github.com/thomsonreuters/gate/cmd/server/middlewares"
 	"github.com/thomsonreuters/gate/internal/config"
 	"github.com/thomsonreuters/gate/internal/constants"
 	"github.com/thomsonreuters/gate/internal/logger"
 	"github.com/thomsonreuters/gate/internal/telemetry"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 const (

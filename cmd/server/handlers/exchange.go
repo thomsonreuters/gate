@@ -56,7 +56,7 @@ type ErrorResponse struct {
 }
 
 // NewExchangeHandler creates an ExchangeHandler with the given STS service.
-// It pulls a tracer and meters from the global OTel providers
+// It pulls a tracer and meters from the global OTel providers.
 func NewExchangeHandler(service sts.Exchanger) (*ExchangeHandler, error) {
 	meter := otel.GetMeterProvider().Meter("exchange")
 	counter, err := meter.Int64Counter("token_exchange_total",
@@ -112,14 +112,15 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	outcome := "ok"
 	defer func() {
-		if r := recover(); r != nil {
+		r := recover()
+		if r != nil {
 			outcome = "panic"
-			panic(r)
 		}
-	}()
-	defer func() {
 		h.exchangeDuration.Record(ctx, time.Since(start).Seconds())
 		h.exchangeCount.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+		if r != nil {
+			panic(r)
+		}
 	}()
 
 	input, ok := r.Context().Value(httpin.Input).(*ExchangeInput)

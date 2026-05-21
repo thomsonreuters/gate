@@ -54,7 +54,7 @@ func SetGlobalLogger(level LogLevel, format LogFormat, otelEnabled bool) {
 		stdoutHandler = slog.NewTextHandler(os.Stdout, opts)
 	}
 
-	var handler slog.Handler = stdoutHandler
+	var handler = stdoutHandler
 	if otelEnabled {
 		enriched := slogext.NewTraceHandler(stdoutHandler)
 		bridge := otelslog.NewHandler(constants.ProgramIdentifier)

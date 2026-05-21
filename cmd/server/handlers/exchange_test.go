@@ -171,7 +171,7 @@ func TestExchange_ExchangeError(t *testing.T) {
 
 			svc := &mockService{err: tt.err}
 			h, hErr := NewExchangeHandler(svc)
-	require.NoError(t, hErr)
+			require.NoError(t, hErr)
 
 			input := &ExchangeInput{
 				Body: sts.ExchangeRequest{OIDCToken: "tok", TargetRepository: "org/repo"},

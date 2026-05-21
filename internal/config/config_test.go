@@ -496,13 +496,31 @@ func TestAuditConfig_Validate(t *testing.T) {
 		{name: "sql_valid", cfg: AuditConfig{Backend: AuditBackendSQL, SQL: &AuditSQLConfig{DSN: "postgres://localhost/gate"}}},
 		{name: "sql_nil_config", cfg: AuditConfig{Backend: AuditBackendSQL}, fails: ErrInvalidSQLConfig},
 		{name: "sql_empty_dsn", cfg: AuditConfig{Backend: AuditBackendSQL, SQL: &AuditSQLConfig{DSN: ""}}, fails: ErrInvalidSQLDSN},
-		{name: "dynamodb_valid", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit_logs", TTLDays: 90}}},
+		{
+			name: "dynamodb_valid",
+			cfg:  AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit_logs", TTLDays: 90}},
+		},
 		{name: "dynamodb_nil_config", cfg: AuditConfig{Backend: AuditBackendDynamoDB}, fails: ErrInvalidDynamoDBConfig},
-		{name: "dynamodb_empty_table", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TTLDays: 90}}, fails: ErrInvalidDynamoDBTable},
-		{name: "dynamodb_ttl_negative", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: -1}}, fails: ErrInvalidDynamoDBTTLDays},
-		{name: "dynamodb_ttl_exceeds_max", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: MaxDynamoDBTTLDays + 1}}, fails: ErrInvalidDynamoDBTTLDays},
+		{
+			name:  "dynamodb_empty_table",
+			cfg:   AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TTLDays: 90}},
+			fails: ErrInvalidDynamoDBTable,
+		},
+		{
+			name:  "dynamodb_ttl_negative",
+			cfg:   AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: -1}},
+			fails: ErrInvalidDynamoDBTTLDays,
+		},
+		{
+			name:  "dynamodb_ttl_exceeds_max",
+			cfg:   AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: MaxDynamoDBTTLDays + 1}},
+			fails: ErrInvalidDynamoDBTTLDays,
+		},
 		{name: "dynamodb_ttl_zero", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: 0}}},
-		{name: "dynamodb_ttl_max", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: MaxDynamoDBTTLDays}}},
+		{
+			name: "dynamodb_ttl_max",
+			cfg:  AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: MaxDynamoDBTTLDays}},
+		},
 		{name: "unknown_backend", cfg: AuditConfig{Backend: "unknown"}, fails: ErrInvalidAuditBackendType},
 	}
 
@@ -555,14 +573,42 @@ func TestSelectorConfig_Validate(t *testing.T) {
 		{name: "redis", cfg: SelectorConfig{Type: SelectorStoreTypeRedis, Redis: &RedisConfig{Address: "localhost:6379"}}},
 		{name: "redis_nil_config", cfg: SelectorConfig{Type: SelectorStoreTypeRedis}, fails: ErrInvalidRedisConfig},
 		{name: "redis_empty_address", cfg: SelectorConfig{Type: SelectorStoreTypeRedis, Redis: &RedisConfig{}}, fails: ErrInvalidRedisAddress},
-		{name: "redis_negative_db", cfg: SelectorConfig{Type: SelectorStoreTypeRedis, Redis: &RedisConfig{Address: "localhost:6379", DB: -1}}, fails: ErrInvalidRedisDB},
+		{
+			name:  "redis_negative_db",
+			cfg:   SelectorConfig{Type: SelectorStoreTypeRedis, Redis: &RedisConfig{Address: "localhost:6379", DB: -1}},
+			fails: ErrInvalidRedisDB,
+		},
 		{name: "dynamodb", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "rate_limits"}}},
 		{name: "dynamodb_nil_config", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB}, fails: ErrInvalidSelectorDynamoDBConfig},
-		{name: "dynamodb_empty_table", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{}}, fails: ErrInvalidSelectorDynamoDBTable},
-		{name: "dynamodb_ttl_negative", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: -1}}, fails: ErrInvalidSelectorDynamoDBTTL},
-		{name: "dynamodb_ttl_exceeds_max", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: MaxSelectorDynamoDBTTLMinutes + 1}}, fails: ErrInvalidSelectorDynamoDBTTL},
-		{name: "dynamodb_ttl_zero", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: 0}}},
-		{name: "dynamodb_ttl_max", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: MaxSelectorDynamoDBTTLMinutes}}},
+		{
+			name:  "dynamodb_empty_table",
+			cfg:   SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{}},
+			fails: ErrInvalidSelectorDynamoDBTable,
+		},
+		{
+			name:  "dynamodb_ttl_negative",
+			cfg:   SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: -1}},
+			fails: ErrInvalidSelectorDynamoDBTTL,
+		},
+		{
+			name: "dynamodb_ttl_exceeds_max",
+			cfg: SelectorConfig{
+				Type:     SelectorStoreTypeDynamoDB,
+				DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: MaxSelectorDynamoDBTTLMinutes + 1},
+			},
+			fails: ErrInvalidSelectorDynamoDBTTL,
+		},
+		{
+			name: "dynamodb_ttl_zero",
+			cfg:  SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: 0}},
+		},
+		{
+			name: "dynamodb_ttl_max",
+			cfg: SelectorConfig{
+				Type:     SelectorStoreTypeDynamoDB,
+				DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: MaxSelectorDynamoDBTTLMinutes},
+			},
+		},
 		{name: "unknown_type", cfg: SelectorConfig{Type: "unknown"}, fails: ErrInvalidSelectorStoreType},
 	}
 

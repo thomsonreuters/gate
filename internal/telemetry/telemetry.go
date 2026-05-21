@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 
 	"github.com/thomsonreuters/gate/internal/config"
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
@@ -102,8 +103,8 @@ func Init(ctx context.Context, cfg *config.OTelConfig) (func(context.Context) er
 		slog.DebugContext(ctx, "Shutting down OpenTelemetry providers")
 		var errs []error
 		// Shut down in reverse registration order so dependents finish first.
-		for i := len(shutdowns) - 1; i >= 0; i-- {
-			if err := shutdowns[i](ctx); err != nil {
+		for i, v := range slices.Backward(shutdowns) {
+			if err := v(ctx); err != nil {
 				slog.WarnContext(ctx, "OTel provider shutdown failed",
 					slog.Int("index", i),
 					slog.Any("error", err),
