@@ -41,10 +41,12 @@ type ExchangeInput struct {
 
 // ExchangeHandler handles POST /api/v1/exchange requests.
 type ExchangeHandler struct {
-	service          sts.Exchanger
-	tracer           trace.Tracer
-	exchangeCount    metric.Int64Counter
-	exchangeDuration metric.Float64Histogram
+	service             sts.Exchanger
+	tracer              trace.Tracer
+	exchangeCount       metric.Int64Counter
+	exchangeDuration    metric.Float64Histogram
+	tokenIssuedCount    metric.Int64Counter
+	callerExchangeCount metric.Int64Counter
 }
 
 // ErrorResponse is the JSON body returned for all exchange failures.
@@ -72,11 +74,25 @@ func NewExchangeHandler(service sts.Exchanger) (*ExchangeHandler, error) {
 		return nil, fmt.Errorf("registering token exchange duration histogram: %w", err)
 	}
 
+	tokenIssued, err := meter.Int64Counter("token_issued_total",
+		metric.WithDescription("Tokens issued by repository and policy"))
+	if err != nil {
+		return nil, fmt.Errorf("registering token issued counter: %w", err)
+	}
+
+	callerExchange, err := meter.Int64Counter("caller_exchange_total",
+		metric.WithDescription("Exchange attempts by caller identity and outcome"))
+	if err != nil {
+		return nil, fmt.Errorf("registering caller exchange counter: %w", err)
+	}
+
 	return &ExchangeHandler{
-		service:          service,
-		tracer:           otel.GetTracerProvider().Tracer("exchange"),
-		exchangeCount:    counter,
-		exchangeDuration: histogram,
+		service:             service,
+		tracer:              otel.GetTracerProvider().Tracer("exchange"),
+		exchangeCount:       counter,
+		exchangeDuration:    histogram,
+		tokenIssuedCount:    tokenIssued,
+		callerExchangeCount: callerExchange,
 	}, nil
 }
 
@@ -111,6 +127,8 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	outcome := "ok"
+	var callerIssuer, callerSubject string
+
 	defer func() {
 		r := recover()
 		if r != nil {
@@ -118,6 +136,13 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 		}
 		h.exchangeDuration.Record(ctx, time.Since(start).Seconds())
 		h.exchangeCount.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", outcome)))
+		if callerIssuer != "" || callerSubject != "" {
+			h.callerExchangeCount.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("sub", callerSubject),
+				attribute.String("issuer", callerIssuer),
+				attribute.String("outcome", outcome),
+			))
+		}
 		if r != nil {
 			panic(r)
 		}
@@ -134,12 +159,20 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var exErr *sts.ExchangeError
 		if errors.As(err, &exErr) {
+			callerIssuer = exErr.Issuer
+			callerSubject = exErr.Subject
 			outcome = h.writeError(w, r, span, exErr.Code, exErr.Message, exErr.RequestID, exErr.RetryAfterSeconds, err)
 			return
 		}
 		outcome = h.writeError(w, r, span, sts.ErrInternalError, "Internal server error", requestID, 0, err)
 		return
 	}
+
+	callerIssuer = response.Issuer
+	callerSubject = response.Subject
+	h.tokenIssuedCount.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("repository", input.Body.TargetRepository),
+	))
 
 	span.SetAttributes(
 		attribute.String("matched_policy", response.MatchedPolicy),

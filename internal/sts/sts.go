@@ -90,6 +90,9 @@ type ExchangeResponse struct {
 	MatchedPolicy string            `json:"matched_policy"`
 	Permissions   map[string]string `json:"permissions"`
 	RequestID     string            `json:"request_id"`
+
+	Issuer  string `json:"-"`
+	Subject string `json:"-"`
 }
 
 // Service orchestrates the complete STS token exchange workflow.
@@ -240,12 +243,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		authSpan.SetStatus(codes.Error, string(result.DenyReason.Code))
 		authSpan.End()
 		s.auditDenied(ctx, requestID, claims, req, string(result.DenyReason.Code))
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      string(result.DenyReason.Code),
 			Message:   result.DenyReason.Message,
 			Details:   result.DenyReason.Details,
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 	authSpan.SetAttributes(attribute.String("matched_policy", result.MatchedPolicy))
 	authSpan.End()
@@ -259,20 +262,20 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		selectSpan.End()
 		if exhausted, ok := errors.AsType[*selector.ExhaustedError](err); ok {
 			s.auditDenied(ctx, requestID, claims, req, ErrRateLimited)
-			return nil, &ExchangeError{
+			return nil, (&ExchangeError{
 				Code:              ErrRateLimited,
 				Message:           "All GitHub Apps exhausted rate limits",
 				RequestID:         requestID,
 				RetryAfterSeconds: exhausted.RetryAfter,
-			}
+			}).WithCaller(claims.Issuer, claims.Subject)
 		}
 		s.auditDenied(ctx, requestID, claims, req, ErrAppSelectionFailed)
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrInternalError,
 			Message:   "Failed to select GitHub App",
 			Details:   err.Error(),
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 	selectSpan.SetAttributes(attribute.String("client_id", app.ClientID))
 	selectSpan.End()
@@ -280,12 +283,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 	client, ok := s.clients[app.ClientID]
 	if !ok {
 		s.auditDenied(ctx, requestID, claims, req, ErrClientNotFound)
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrInternalError,
 			Message:   "GitHub client not found for app",
 			Details:   app.ClientID,
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 
 	mintCtx, mintSpan := s.tracer.Start(ctx, "MintInstallationToken")
@@ -299,12 +302,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		mintSpan.SetStatus(codes.Error, "github token request failed")
 		mintSpan.End()
 		s.auditDenied(ctx, requestID, claims, req, ErrGitHubAPIError)
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrGitHubAPIError,
 			Message:   "Failed to request GitHub token",
 			Details:   err.Error(),
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 	mintSpan.End()
 
@@ -323,12 +326,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 	s.tokenTracker.Record(tokenHash, tokenResp.Token, expires)
 
 	if err := s.auditGranted(ctx, requestID, claims, req, result, app.ClientID, tokenHash); err != nil {
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrInternalError,
 			Message:   "Audit log failed",
 			Details:   err.Error(),
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 
 	return &ExchangeResponse{
@@ -337,6 +340,8 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		MatchedPolicy: result.MatchedPolicy,
 		Permissions:   result.EffectivePermissions,
 		RequestID:     requestID,
+		Issuer:        claims.Issuer,
+		Subject:       claims.Subject,
 	}, nil
 }
 

@@ -40,6 +40,16 @@ type ExchangeError struct {
 	Details           string `json:"details,omitempty"`             // Optional additional context.
 	RequestID         string `json:"request_id"`                    // Request ID for correlation.
 	RetryAfterSeconds int    `json:"retry_after_seconds,omitempty"` // Set when code is RATE_LIMITED.
+
+	Issuer  string `json:"-"` // Caller issuer (set after OIDC validation).
+	Subject string `json:"-"` // Caller subject (set after OIDC validation).
+}
+
+// WithCaller sets the caller identity fields and returns the error for chaining.
+func (e *ExchangeError) WithCaller(issuer, subject string) *ExchangeError {
+	e.Issuer = issuer
+	e.Subject = subject
+	return e
 }
 
 // Error returns the formatted error message including the error code and details.
