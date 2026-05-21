@@ -135,6 +135,13 @@ func TestConfig_Validate(t *testing.T) {
 			},
 			fails: ErrInvalidGithubAppClientID,
 		},
+		{
+			name: "invalid_otel",
+			modify: func(c *Config) {
+				c.OTel = OTelConfig{Enabled: true, Endpoint: "", Protocol: "grpc", SampleRate: 1.0}
+			},
+			fails: ErrOTelEndpointRequired,
+		},
 	}
 
 	for _, tt := range tests {
@@ -343,6 +350,111 @@ func TestLoad_SetsCurrent(t *testing.T) {
 	assert.Same(t, cfg, GetCurrent())
 }
 
+func TestLoad_FullConfig(t *testing.T) {
+	configPath := filepath.Join("testdata", "full_config.yaml")
+
+	cfg, err := Load(t.Context(), configPath)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+
+	assert.Equal(t, logger.LogLevelWarn, cfg.Logger.Level)
+	assert.Equal(t, logger.LogFormatText, cfg.Logger.Format)
+
+	assert.Equal(t, 9443, cfg.Server.Port)
+	assert.Equal(t, 45*time.Second, cfg.Server.ReadTimeout)
+	assert.Equal(t, 15*time.Second, cfg.Server.ShutdownTimeout)
+	assert.True(t, cfg.Server.TLS.Enabled())
+
+	assert.Equal(t, "gate-prod", cfg.OIDC.Audience)
+
+	assert.Equal(t, AuditBackendSQL, cfg.Audit.Backend)
+	require.NotNil(t, cfg.Audit.SQL)
+
+	assert.Equal(t, SelectorStoreTypeRedis, cfg.Selector.Type)
+	require.NotNil(t, cfg.Selector.Redis)
+	assert.Equal(t, "redis.example.com:6379", cfg.Selector.Redis.Address)
+	assert.Equal(t, 1, cfg.Selector.Redis.DB)
+	assert.True(t, cfg.Selector.Redis.TLS)
+
+	assert.Equal(t, 600, cfg.Policy.DefaultTokenTTL)
+	assert.Equal(t, 1800, cfg.Policy.MaxTokenTTL)
+	assert.True(t, cfg.Policy.RequireExplicitPolicy)
+	assert.Equal(t, "https://github.example.com/api/v3", cfg.Policy.GitHubAPIBaseURL)
+	assert.Equal(t, "https://github.example.com/raw", cfg.Policy.GitHubRawBaseURL)
+	require.Len(t, cfg.Policy.Providers, 2)
+	assert.NotNil(t, cfg.Policy.Providers[0].TimeRestrictions)
+	assert.Len(t, cfg.Policy.Providers[0].TimeRestrictions.AllowedDays, 5)
+	assert.Equal(t, 8, cfg.Policy.Providers[0].TimeRestrictions.AllowedHours.Start)
+	assert.Equal(t, 20, cfg.Policy.Providers[0].TimeRestrictions.AllowedHours.End)
+
+	assert.True(t, cfg.Origin.Enabled)
+	assert.True(t, cfg.FIPS.Enabled)
+	assert.Equal(t, FIPSModeOnly, cfg.FIPS.Mode)
+
+	assert.True(t, cfg.OTel.Enabled)
+	assert.Equal(t, "gate-prod", cfg.OTel.ServiceName)
+	assert.InDelta(t, 0.25, cfg.OTel.SampleRate, 0.001)
+
+	require.Len(t, cfg.GitHubApps, 1)
+	assert.Equal(t, "example-org", cfg.GitHubApps[0].Organization)
+}
+
+func TestLoad_EnvOverrideOTelFields(t *testing.T) {
+	configPath := filepath.Join("testdata", "minimal_config.yaml")
+
+	t.Setenv("GATE_OTEL_ENABLED", "true")
+	t.Setenv("GATE_OTEL_ENDPOINT", "custom-collector:4317")
+	t.Setenv("GATE_OTEL_SERVICE_NAME", "gate-env")
+
+	cfg, err := Load(t.Context(), configPath)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.True(t, cfg.OTel.Enabled)
+	assert.Equal(t, "custom-collector:4317", cfg.OTel.Endpoint)
+	assert.Equal(t, "gate-env", cfg.OTel.ServiceName)
+}
+
+func TestLoad_EnvOverrideFIPSFields(t *testing.T) {
+	configPath := filepath.Join("testdata", "minimal_config.yaml")
+
+	t.Setenv("GATE_FIPS_ENABLED", "true")
+	t.Setenv("GATE_FIPS_MODE", "only")
+
+	cfg, err := Load(t.Context(), configPath)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.True(t, cfg.FIPS.Enabled)
+	assert.Equal(t, FIPSModeOnly, cfg.FIPS.Mode)
+}
+
+func TestLoad_EnvOverrideOriginFields(t *testing.T) {
+	configPath := filepath.Join("testdata", "minimal_config.yaml")
+
+	t.Setenv("GATE_ORIGIN_ENABLED", "true")
+	t.Setenv("GATE_ORIGIN_HEADER_NAME", "X-Custom")
+	t.Setenv("GATE_ORIGIN_HEADER_VALUE", "env-value")
+
+	cfg, err := Load(t.Context(), configPath)
+
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.True(t, cfg.Origin.Enabled)
+	assert.Equal(t, "X-Custom", cfg.Origin.HeaderName)
+	assert.Equal(t, "env-value", cfg.Origin.HeaderValue)
+}
+
+func TestGetSetCurrent(t *testing.T) {
+	SetCurrent(nil)
+	assert.Nil(t, GetCurrent())
+
+	cfg := &Config{AWSRegion: "eu-west-1"}
+	SetCurrent(cfg)
+	assert.Same(t, cfg, GetCurrent())
+}
+
 func TestLoggerConfig_Validate(t *testing.T) {
 	t.Parallel()
 
@@ -371,6 +483,64 @@ func TestLoggerConfig_Validate(t *testing.T) {
 	}
 }
 
+func TestAuditConfig_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		cfg   AuditConfig
+		fails error
+	}{
+		{name: "empty_backend", cfg: AuditConfig{}},
+		{name: "sql_valid", cfg: AuditConfig{Backend: AuditBackendSQL, SQL: &AuditSQLConfig{DSN: "postgres://localhost/gate"}}},
+		{name: "sql_nil_config", cfg: AuditConfig{Backend: AuditBackendSQL}, fails: ErrInvalidSQLConfig},
+		{name: "sql_empty_dsn", cfg: AuditConfig{Backend: AuditBackendSQL, SQL: &AuditSQLConfig{DSN: ""}}, fails: ErrInvalidSQLDSN},
+		{name: "dynamodb_valid", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit_logs", TTLDays: 90}}},
+		{name: "dynamodb_nil_config", cfg: AuditConfig{Backend: AuditBackendDynamoDB}, fails: ErrInvalidDynamoDBConfig},
+		{name: "dynamodb_empty_table", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TTLDays: 90}}, fails: ErrInvalidDynamoDBTable},
+		{name: "dynamodb_ttl_negative", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: -1}}, fails: ErrInvalidDynamoDBTTLDays},
+		{name: "dynamodb_ttl_exceeds_max", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: MaxDynamoDBTTLDays + 1}}, fails: ErrInvalidDynamoDBTTLDays},
+		{name: "dynamodb_ttl_zero", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: 0}}},
+		{name: "dynamodb_ttl_max", cfg: AuditConfig{Backend: AuditBackendDynamoDB, DynamoDB: &AuditDynamoDBConfig{TableName: "audit", TTLDays: MaxDynamoDBTTLDays}}},
+		{name: "unknown_backend", cfg: AuditConfig{Backend: "unknown"}, fails: ErrInvalidAuditBackendType},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.cfg.Validate()
+			if tt.fails != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.fails)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestAuditConfig_IsMigrationSupported(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		backend AuditBackendType
+		want    bool
+	}{
+		{name: "sql", backend: AuditBackendSQL, want: true},
+		{name: "dynamodb", backend: AuditBackendDynamoDB, want: false},
+		{name: "empty", backend: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &AuditConfig{Backend: tt.backend}
+			assert.Equal(t, tt.want, cfg.IsMigrationSupported())
+		})
+	}
+}
+
 func TestSelectorConfig_Validate(t *testing.T) {
 	t.Parallel()
 
@@ -383,13 +553,15 @@ func TestSelectorConfig_Validate(t *testing.T) {
 		{name: "memory", cfg: SelectorConfig{Type: SelectorStoreTypeMemory}},
 		{name: "redis", cfg: SelectorConfig{Type: SelectorStoreTypeRedis, Redis: &RedisConfig{Address: "localhost:6379"}}},
 		{name: "redis_nil_config", cfg: SelectorConfig{Type: SelectorStoreTypeRedis}, fails: ErrInvalidRedisConfig},
+		{name: "redis_empty_address", cfg: SelectorConfig{Type: SelectorStoreTypeRedis, Redis: &RedisConfig{}}, fails: ErrInvalidRedisAddress},
+		{name: "redis_negative_db", cfg: SelectorConfig{Type: SelectorStoreTypeRedis, Redis: &RedisConfig{Address: "localhost:6379", DB: -1}}, fails: ErrInvalidRedisDB},
 		{name: "dynamodb", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "rate_limits"}}},
 		{name: "dynamodb_nil_config", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB}, fails: ErrInvalidSelectorDynamoDBConfig},
-		{
-			name:  "dynamodb_empty_table",
-			cfg:   SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{}},
-			fails: ErrInvalidSelectorDynamoDBTable,
-		},
+		{name: "dynamodb_empty_table", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{}}, fails: ErrInvalidSelectorDynamoDBTable},
+		{name: "dynamodb_ttl_negative", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: -1}}, fails: ErrInvalidSelectorDynamoDBTTL},
+		{name: "dynamodb_ttl_exceeds_max", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: MaxSelectorDynamoDBTTLMinutes + 1}}, fails: ErrInvalidSelectorDynamoDBTTL},
+		{name: "dynamodb_ttl_zero", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: 0}}},
+		{name: "dynamodb_ttl_max", cfg: SelectorConfig{Type: SelectorStoreTypeDynamoDB, DynamoDB: &SelectorDynamoDBConfig{TableName: "s", TTLMinutes: MaxSelectorDynamoDBTTLMinutes}}},
 		{name: "unknown_type", cfg: SelectorConfig{Type: "unknown"}, fails: ErrInvalidSelectorStoreType},
 	}
 
@@ -462,6 +634,39 @@ func TestPolicyConfig_Validate(t *testing.T) {
 	}
 }
 
+func TestPolicyConfig_Issuers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		providers []ProviderConfig
+		want      []string
+	}{
+		{name: "empty", providers: nil, want: []string{}},
+		{
+			name:      "single",
+			providers: []ProviderConfig{{Issuer: "https://token.actions.githubusercontent.com", Name: "GH"}},
+			want:      []string{"https://token.actions.githubusercontent.com"},
+		},
+		{
+			name: "multiple",
+			providers: []ProviderConfig{
+				{Issuer: "https://token.actions.githubusercontent.com", Name: "GH"},
+				{Issuer: "https://accounts.google.com", Name: "Google"},
+			},
+			want: []string{"https://token.actions.githubusercontent.com", "https://accounts.google.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &PolicyConfig{Providers: tt.providers}
+			assert.Equal(t, tt.want, cfg.Issuers())
+		})
+	}
+}
+
 func TestProviderConfig_Validate(t *testing.T) {
 	t.Parallel()
 
@@ -479,6 +684,15 @@ func TestProviderConfig_Validate(t *testing.T) {
 				c.TimeRestrictions = &TimeRestriction{AllowedDays: []AllowedDays{"NotADay"}}
 			},
 			fails: ErrInvalidAllowedDays,
+		},
+		{
+			name: "valid_time_restrictions",
+			modify: func(c *ProviderConfig) {
+				c.TimeRestrictions = &TimeRestriction{
+					AllowedDays:  []AllowedDays{AllowedDaysMonday, AllowedDaysFriday},
+					AllowedHours: &HourRange{Start: 9, End: 17},
+				}
+			},
 		},
 	}
 
@@ -540,6 +754,9 @@ func TestHourRange_Validate(t *testing.T) {
 		fails error
 	}{
 		{name: "valid", cfg: HourRange{Start: 9, End: 17}},
+		{name: "boundary_zero", cfg: HourRange{Start: 0, End: 0}},
+		{name: "boundary_max", cfg: HourRange{Start: 23, End: 23}},
+		{name: "full_range", cfg: HourRange{Start: 0, End: 23}},
 		{name: "start_negative", cfg: HourRange{Start: -1, End: 17}, fails: ErrInvalidStartHour},
 		{name: "start_exceeds_23", cfg: HourRange{Start: 24, End: 17}, fails: ErrInvalidStartHour},
 		{name: "end_negative", cfg: HourRange{Start: 9, End: -1}, fails: ErrInvalidEndHour},
@@ -570,6 +787,14 @@ func TestTimeRestriction_Validate(t *testing.T) {
 	}{
 		{name: "valid", cfg: TimeRestriction{AllowedDays: []AllowedDays{AllowedDaysMonday}, AllowedHours: &HourRange{Start: 9, End: 17}}},
 		{name: "nil_hours", cfg: TimeRestriction{AllowedDays: []AllowedDays{AllowedDaysTuesday}}},
+		{
+			name: "all_days",
+			cfg: TimeRestriction{AllowedDays: []AllowedDays{
+				AllowedDaysMonday, AllowedDaysTuesday, AllowedDaysWednesday,
+				AllowedDaysThursday, AllowedDaysFriday, AllowedDaysSaturday,
+				AllowedDaysSunday,
+			}},
+		},
 		{name: "invalid_day", cfg: TimeRestriction{AllowedDays: []AllowedDays{"NotADay"}}, fails: ErrInvalidAllowedDays},
 		{name: "invalid_hours", cfg: TimeRestriction{AllowedHours: &HourRange{Start: -1, End: 17}}, fails: ErrInvalidStartHour},
 	}
@@ -644,8 +869,9 @@ func TestServerConfig_Validate(t *testing.T) {
 func TestServerConfig_GetAddr(t *testing.T) {
 	t.Parallel()
 
-	cfg := ServerConfig{Port: 9090}
-	assert.Equal(t, ":9090", cfg.GetAddr())
+	assert.Equal(t, ":9090", (&ServerConfig{Port: 9090}).GetAddr())
+	assert.Equal(t, ":1", (&ServerConfig{Port: portMin}).GetAddr())
+	assert.Equal(t, ":65535", (&ServerConfig{Port: portMax}).GetAddr())
 }
 
 func TestTLSConfig_Enabled(t *testing.T) {
@@ -668,6 +894,32 @@ func TestTLSConfig_Validate(t *testing.T) {
 		{name: "neither_set", cfg: TLSConfig{}},
 		{name: "cert_only", cfg: TLSConfig{CertFilePath: "/cert.pem"}, fails: ErrInvalidTLSConfig},
 		{name: "key_only", cfg: TLSConfig{KeyFilePath: "/key.pem"}, fails: ErrInvalidTLSConfig},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.cfg.Validate()
+			if tt.fails != nil {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, tt.fails)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestOIDCConfig_Validate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		cfg   OIDCConfig
+		fails error
+	}{
+		{name: "valid", cfg: OIDCConfig{Audience: "gate"}},
+		{name: "empty_audience", cfg: OIDCConfig{}, fails: ErrInvalidOIDCAudience},
 	}
 
 	for _, tt := range tests {
@@ -723,6 +975,7 @@ func TestFIPSConfig_Validate(t *testing.T) {
 		{name: "enabled_on", cfg: FIPSConfig{Enabled: true, Mode: FIPSModeOn}},
 		{name: "enabled_only", cfg: FIPSConfig{Enabled: true, Mode: FIPSModeOnly}},
 		{name: "disabled", cfg: FIPSConfig{Enabled: false}},
+		{name: "disabled_with_mode", cfg: FIPSConfig{Enabled: false, Mode: FIPSModeOn}},
 		{name: "invalid_mode", cfg: FIPSConfig{Enabled: true, Mode: "off"}, fails: ErrInvalidFIPSMode},
 	}
 
@@ -736,6 +989,28 @@ func TestFIPSConfig_Validate(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestIsValidFIPSMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mode FIPSMode
+		want bool
+	}{
+		{FIPSModeOn, true},
+		{FIPSModeOnly, true},
+		{"off", false},
+		{"", false},
+		{"invalid", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.mode), func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, IsValidFIPSMode(tt.mode))
 		})
 	}
 }

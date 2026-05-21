@@ -1,0 +1,101 @@
+# Copyright 2026 Thomson Reuters
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+logger:
+  level: warn
+  format: text
+
+server:
+  port: 9443
+  read_timeout: 45s
+  write_timeout: 45s
+  shutdown_timeout: 15s
+  request_timeout: 45s
+  idle_timeout: 15s
+  wait_timeout: 15s
+  tls:
+    cert_file_path: "/etc/gate/tls/cert.pem"
+    key_file_path: "/etc/gate/tls/key.pem"
+
+oidc:
+  audience: gate-prod
+
+audit:
+  backend: sql
+  sql:
+    dsn: "postgres://gate:secret@db.example.com:5432/gate?sslmode=require"
+
+selector:
+  type: redis
+  redis:
+    address: "redis.example.com:6379"
+    password: "redis-secret"
+    db: 1
+    tls: true
+
+policy:
+  version: "1.0"
+  trust_policy_path: ".github/gate/trust-policy.yaml"
+  default_token_ttl: 600
+  max_token_ttl: 1800
+  require_explicit_policy: true
+  github_api_base_url: "https://github.example.com/api/v3"
+  github_raw_base_url: "https://github.example.com/raw"
+  providers:
+    - issuer: https://token.actions.githubusercontent.com
+      name: GitHub Actions
+      required_claims:
+        repository_owner: "example-org"
+      forbidden_claims: {}
+      time_restrictions:
+        allowed_days:
+          - Monday
+          - Tuesday
+          - Wednesday
+          - Thursday
+          - Friday
+        allowed_hours:
+          start: 8
+          end: 20
+    - issuer: https://accounts.google.com
+      name: Google Workspace
+      required_claims: {}
+      forbidden_claims: {}
+  max_permissions:
+    contents: read
+    issues: write
+    pull_requests: write
+    packages: none
+
+origin:
+  enabled: true
+  header_name: "X-Gate-Origin"
+  header_value: "corp-proxy"
+
+fips:
+  enabled: true
+  mode: "only"
+
+otel:
+  enabled: true
+  service_name: gate-prod
+  endpoint: "otel-collector.example.com:4317"
+  protocol: grpc
+  insecure: false
+  sample_rate: 0.25
+
+github_apps:
+  - client_id: "Iv1.prod123"
+    private_key_path: "/etc/gate/keys/prod.pem"
+    organization: "example-org"
