@@ -57,6 +57,7 @@ type Config struct {
 	OIDC       OIDCConfig        `mapstructure:"oidc"`
 	Origin     OriginConfig      `mapstructure:"origin"`
 	FIPS       FIPSConfig        `mapstructure:"fips"`
+	OTel       OTelConfig        `mapstructure:"otel"`
 	GitHubApps []GitHubAppConfig `mapstructure:"github_apps"`
 
 	AWSRegion string `mapstructure:"aws_region"`
@@ -73,6 +74,7 @@ func (c *Config) Validate() error {
 		c.OIDC.Validate,
 		c.Origin.Validate,
 		c.FIPS.Validate,
+		c.OTel.Validate,
 		func() error { return ValidateGitHubApps(c.GitHubApps) },
 	}
 
@@ -152,7 +154,10 @@ func Load(ctx context.Context, configPath string) (*Config, error) {
 		return nil, err
 	}
 
-	logger.SetGlobalLogger(cfg.Logger.Level, cfg.Logger.Format)
+	// Apply the basic stdout logger now so subsequent code logs at the configured
+	// level/format. The OTel-bridged logger is installed later by server.Init,
+	// after telemetry.Init has set up the global logger provider.
+	logger.SetGlobalLogger(cfg.Logger.Level, cfg.Logger.Format, false)
 
 	SetCurrent(cfg)
 
@@ -197,6 +202,8 @@ func bindEnv(v *viper.Viper) {
 
 	mustBindEnv(v, KeyFIPSEnabled, KeyFIPSMode)
 
+	mustBindEnv(v, KeyOTelEnabled, KeyOTelServiceName, KeyOTelEndpoint, KeyOTelProtocol, KeyOTelInsecure, KeyOTelSampleRate, KeyOTelExporterTimeout)
+
 	mustBindEnv(v, KeyAWSRegion)
 }
 
@@ -226,6 +233,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault(KeyPolicyMaxTokenTTL, DefaultPolicyMaxTokenTTL)
 	v.SetDefault(KeyPolicyGitHubAPIBaseURL, DefaultGitHubAPIBaseURL)
 	v.SetDefault(KeyPolicyGitHubRawBaseURL, DefaultGitHubRawBaseURL)
+
+	v.SetDefault(KeyOTelServiceName, DefaultOTelServiceName)
+	v.SetDefault(KeyOTelEndpoint, DefaultOTelEndpoint)
+	v.SetDefault(KeyOTelProtocol, DefaultOTelProtocol)
+	v.SetDefault(KeyOTelInsecure, DefaultOTelInsecure)
+	v.SetDefault(KeyOTelSampleRate, DefaultOTelSampleRate)
+	v.SetDefault(KeyOTelExporterTimeout, DefaultOTelExporterTimeout)
 }
 
 // mustBindEnv binds each key to its environment variable; panics on failure.

@@ -219,7 +219,10 @@ func StartServer(t *testing.T, ctx *Context, options ...ServerOption) *Server {
 		t.Fatalf("create service: %v", err)
 	}
 
-	exchangeHandler := handlers.NewExchangeHandler(svc)
+	exchangeHandler, err := handlers.NewExchangeHandler(svc)
+	if err != nil {
+		t.Fatalf("create exchange handler: %v", err)
+	}
 
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)

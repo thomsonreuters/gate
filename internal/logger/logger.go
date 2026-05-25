@@ -20,6 +20,10 @@ package logger
 import (
 	"log/slog"
 	"os"
+
+	"github.com/thomsonreuters/gate/internal/constants"
+	"github.com/thomsonreuters/gate/internal/logger/slogext"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 )
 
 // GetSlogLevel returns the slog level for the given level string.
@@ -37,21 +41,36 @@ func GetSlogLevel(level LogLevel) slog.Level {
 	return slog.LevelInfo
 }
 
-// SetGlobalLogger sets the default slog logger with the given level and format.
-func SetGlobalLogger(level LogLevel, format LogFormat) {
+// SetGlobalLogger sets the default slog logger. When otelEnabled is true,
+// records are fanned out to stdout (with trace_id/span_id enrichment) and
+// to the OTel log provider via the otelslog bridge.
+func SetGlobalLogger(level LogLevel, format LogFormat, otelEnabled bool) {
 	opts := &slog.HandlerOptions{Level: GetSlogLevel(level)}
-	var handler slog.Handler
 
+	var stdoutHandler slog.Handler
 	if format == LogFormatJSON {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
+		stdoutHandler = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
+		stdoutHandler = slog.NewTextHandler(os.Stdout, opts)
+	}
+
+	var handler = stdoutHandler
+	if otelEnabled {
+		enriched := slogext.NewTraceHandler(stdoutHandler)
+		bridge := otelslog.NewHandler(constants.ProgramIdentifier)
+		handler = slogext.NewFanoutHandler(enriched, bridge)
 	}
 
 	slog.SetDefault(slog.New(handler))
+	slog.Debug("Global slog logger configured",
+		slog.String("level", level.String()),
+		slog.String("format", format.String()),
+		slog.Bool("otel_fanout", otelEnabled),
+	)
 }
 
-// InitDefaultLevel initializes the default logger with INFO level and JSON format.
+// InitDefaultLevel initializes the default logger with INFO level, JSON format,
+// and OTel disabled. It's safe to call before config is loaded.
 func InitDefaultLevel() {
-	SetGlobalLogger(LogLevelInfo, LogFormatJSON)
+	SetGlobalLogger(LogLevelInfo, LogFormatJSON, false)
 }

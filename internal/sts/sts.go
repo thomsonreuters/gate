@@ -37,6 +37,10 @@ import (
 	"github.com/thomsonreuters/gate/internal/sts/oidc"
 	"github.com/thomsonreuters/gate/internal/sts/selector"
 	"github.com/thomsonreuters/gate/internal/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -86,6 +90,9 @@ type ExchangeResponse struct {
 	MatchedPolicy string            `json:"matched_policy"`
 	Permissions   map[string]string `json:"permissions"`
 	RequestID     string            `json:"request_id"`
+
+	Issuer  string `json:"-"`
+	Subject string `json:"-"`
 }
 
 // Service orchestrates the complete STS token exchange workflow.
@@ -99,6 +106,7 @@ type Service struct {
 	cancelRevoke context.CancelFunc
 	maxTTL       int
 	logger       *slog.Logger
+	tracer       trace.Tracer
 }
 
 // Dependencies holds external dependencies that cannot be derived from config alone.
@@ -154,6 +162,7 @@ func NewService(cfg *config.Config, dependencies Dependencies) (*Service, error)
 		cancelRevoke: cancelRevoke,
 		maxTTL:       cfg.Policy.MaxTokenTTL,
 		logger:       dependencies.Logger,
+		tracer:       otel.GetTracerProvider().Tracer("sts"),
 	}
 
 	svc.runRevocationLoop(revokeCtx)
@@ -201,8 +210,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}
 	}
 
-	claims, err := s.oidc.Validate(ctx, req.OIDCToken)
+	validateCtx, validateSpan := s.tracer.Start(ctx, "ValidateOIDC")
+	defer validateSpan.End()
+	claims, err := s.oidc.Validate(validateCtx, req.OIDCToken)
 	if err != nil {
+		validateSpan.RecordError(err)
+		validateSpan.SetStatus(codes.Error, "oidc validation failed")
 		return nil, &ExchangeError{
 			Code:      ErrInvalidToken,
 			Message:   "OIDC token validation failed",
@@ -210,6 +223,7 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 			RequestID: requestID,
 		}
 	}
+	validateSpan.SetAttributes(attribute.String("issuer", claims.Issuer))
 
 	authReq := &authorizer.Request{
 		Claims:               claimsToMap(claims),
@@ -220,60 +234,73 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		RequestedTTL:         req.RequestedTTL,
 	}
 
-	result := s.authorizer.Authorize(ctx, authReq)
+	authCtx, authSpan := s.tracer.Start(ctx, "EvaluatePolicy")
+	defer authSpan.End()
+	result := s.authorizer.Authorize(authCtx, authReq)
 	if !result.Allowed {
+		authSpan.SetStatus(codes.Error, string(result.DenyReason.Code))
 		s.auditDenied(ctx, requestID, claims, req, string(result.DenyReason.Code))
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      string(result.DenyReason.Code),
 			Message:   result.DenyReason.Message,
 			Details:   result.DenyReason.Details,
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
+	authSpan.SetAttributes(attribute.String("matched_policy", result.MatchedPolicy))
 
-	app, err := s.selector.SelectApp(ctx, req.TargetRepository)
+	selectCtx, selectSpan := s.tracer.Start(ctx, "SelectApp")
+	defer selectSpan.End()
+	app, err := s.selector.SelectApp(selectCtx, req.TargetRepository)
 	if err != nil {
+		selectSpan.RecordError(err)
+		selectSpan.SetStatus(codes.Error, "app selection failed")
 		if exhausted, ok := errors.AsType[*selector.ExhaustedError](err); ok {
 			s.auditDenied(ctx, requestID, claims, req, ErrRateLimited)
-			return nil, &ExchangeError{
+			return nil, (&ExchangeError{
 				Code:              ErrRateLimited,
 				Message:           "All GitHub Apps exhausted rate limits",
 				RequestID:         requestID,
 				RetryAfterSeconds: exhausted.RetryAfter,
-			}
+			}).WithCaller(claims.Issuer, claims.Subject)
 		}
 		s.auditDenied(ctx, requestID, claims, req, ErrAppSelectionFailed)
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrInternalError,
 			Message:   "Failed to select GitHub App",
 			Details:   err.Error(),
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
+	selectSpan.SetAttributes(attribute.String("client_id", app.ClientID))
 
 	client, ok := s.clients[app.ClientID]
 	if !ok {
 		s.auditDenied(ctx, requestID, claims, req, ErrClientNotFound)
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrInternalError,
 			Message:   "GitHub client not found for app",
 			Details:   app.ClientID,
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 
-	tokenResp, err := client.RequestToken(ctx, &github.TokenRequest{
+	mintCtx, mintSpan := s.tracer.Start(ctx, "MintInstallationToken")
+	defer mintSpan.End()
+	tokenResp, err := client.RequestToken(mintCtx, &github.TokenRequest{
 		Repository:  req.TargetRepository,
 		Permissions: result.EffectivePermissions,
 	})
 	if err != nil {
+		mintSpan.RecordError(err)
+		mintSpan.SetStatus(codes.Error, "github token request failed")
 		s.auditDenied(ctx, requestID, claims, req, ErrGitHubAPIError)
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrGitHubAPIError,
 			Message:   "Failed to request GitHub token",
 			Details:   err.Error(),
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 
 	rateInfo, err := client.RateLimit(ctx, tokenResp.Token)
@@ -291,12 +318,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 	s.tokenTracker.Record(tokenHash, tokenResp.Token, expires)
 
 	if err := s.auditGranted(ctx, requestID, claims, req, result, app.ClientID, tokenHash); err != nil {
-		return nil, &ExchangeError{
+		return nil, (&ExchangeError{
 			Code:      ErrInternalError,
 			Message:   "Audit log failed",
 			Details:   err.Error(),
 			RequestID: requestID,
-		}
+		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 
 	return &ExchangeResponse{
@@ -305,6 +332,8 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		MatchedPolicy: result.MatchedPolicy,
 		Permissions:   result.EffectivePermissions,
 		RequestID:     requestID,
+		Issuer:        claims.Issuer,
+		Subject:       claims.Subject,
 	}, nil
 }
 

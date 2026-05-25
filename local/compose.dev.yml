@@ -114,6 +114,26 @@ services:
       localstack:
         condition: service_healthy
 
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:13.3.0@sha256:e0e94bec1fdd27ce2ab304ef954b2cd83d68f91dc1028199d251a0fab83eb17a
+    container_name: gate-aspire-dashboard
+    hostname: aspire-dashboard
+    ports:
+      - "18888:18888"   # Dashboard UI
+      - "4317:4317"     # OTLP/gRPC receiver (standard port, in-container too)
+      - "4318:4318"     # OTLP/HTTP receiver
+    environment:
+      - DOTNET_DASHBOARD_OTLP_ENDPOINT_URL=http://+:4317
+      - DOTNET_DASHBOARD_OTLP_HTTP_ENDPOINT_URL=http://+:4318
+      - DASHBOARD__FRONTEND__AUTHMODE=Unsecured
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:18888/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
   server:
     image: gate-dev
     build:
@@ -152,3 +172,5 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      aspire-dashboard:
+        condition: service_started

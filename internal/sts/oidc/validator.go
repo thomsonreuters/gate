@@ -23,11 +23,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/lestrrat-go/jwx/v2/jwt"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var (
@@ -47,9 +49,10 @@ var (
 
 // Validator validates tokens from a fixed set of allowed issuers.
 type Validator struct {
-	audience  string
-	issuers   map[string]struct{}
-	providers sync.Map // issuer → *gooidc.Provider (cached after first discovery)
+	audience   string
+	issuers    map[string]struct{}
+	providers  sync.Map // issuer → *gooidc.Provider (cached after first discovery)
+	httpClient *http.Client
 }
 
 // NewValidator creates a validator for the given audience and allowed issuers.
@@ -67,7 +70,13 @@ func NewValidator(audience string, allowedIssuers []string) (*Validator, error) 
 		issuers[iss] = struct{}{}
 	}
 
-	return &Validator{audience: audience, issuers: issuers}, nil
+	return &Validator{
+		audience: audience,
+		issuers:  issuers,
+		httpClient: &http.Client{
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		},
+	}, nil
 }
 
 // Claims holds the validated token data consumed by authorization and audit.
@@ -103,12 +112,14 @@ func (o *Validator) Validate(ctx context.Context, rawToken string) (*Claims, err
 		return nil, fmt.Errorf("%w: %s", ErrIssuerDenied, issuer)
 	}
 
-	provider, err := o.provider(ctx, issuer)
+	oidcCtx := gooidc.ClientContext(ctx, o.httpClient)
+
+	provider, err := o.provider(oidcCtx, issuer)
 	if err != nil {
 		return nil, fmt.Errorf("discovering issuer %s: %w", issuer, err)
 	}
 
-	if _, err := provider.Verifier(&gooidc.Config{ClientID: o.audience}).Verify(ctx, rawToken); err != nil {
+	if _, err := provider.Verifier(&gooidc.Config{ClientID: o.audience}).Verify(oidcCtx, rawToken); err != nil {
 		return nil, fmt.Errorf("verifying token: %w", err)
 	}
 
