@@ -143,6 +143,18 @@ data:
       mode: {{ .Values.config.fips.mode | quote }}
     {{- end }}
 
+    {{- if .Values.config.otel.enabled }}
+    # OpenTelemetry configuration
+    otel:
+      enabled: true
+      service_name: {{ .Values.config.otel.serviceName | quote }}
+      endpoint: {{ .Values.config.otel.endpoint | quote }}
+      protocol: {{ .Values.config.otel.protocol | quote }}
+      insecure: {{ .Values.config.otel.insecure }}
+      sample_rate: {{ .Values.config.otel.sampleRate }}
+      exporter_timeout: {{ .Values.config.otel.exporterTimeout | quote }}
+    {{- end }}
+
     # GitHub Apps configuration
     # Private keys mounted from secret at /secrets/github-apps/app-N.pem
     github_apps:

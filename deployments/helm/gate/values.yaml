@@ -220,6 +220,13 @@ networkPolicy:
     #   ports:
     #     - protocol: TCP
     #       port: 5432
+    # Uncomment if using OpenTelemetry export (otel.enabled=true)
+    # The chart only supports OTLP/gRPC on port 4317.
+    # - to:
+    #     - namespaceSelector: {}
+    #   ports:
+    #     - protocol: TCP
+    #       port: 4317
 
 # -----------------------------------------------------------------------------
 # Health Probes
@@ -310,6 +317,35 @@ config:
     #   fail token validation in "only" mode. Ensure all providers use FIPS-approved
     #   algorithms (RS256, ES256, PS256, etc.) before enabling this mode.
     mode: "on"
+
+  # ---------------------------------------------------------------------------
+  # OpenTelemetry (traces, metrics, logs)
+  # ---------------------------------------------------------------------------
+  # When enabled, GATE exports traces, metrics, and logs to an OTLP/gRPC
+  # collector. Logs continue to be written to stdout regardless.
+  #
+  # The collector is expected to be reachable from the pod — typically an
+  # in-cluster collector (e.g., otel-collector.observability.svc:4317) or a
+  # node-local DaemonSet. If your cluster has NetworkPolicies enabled, add
+  # an egress rule (see networkPolicy.egress example below) so pods can
+  # reach the collector port (default 4317 for OTLP/gRPC).
+  otel:
+    # Enable the OpenTelemetry export pipeline
+    enabled: false
+    # service.name resource attribute reported to the collector
+    serviceName: "gate"
+    # OTLP/gRPC collector endpoint (host:port, no scheme)
+    # REQUIRED when enabled=true — no default to force explicit configuration
+    endpoint: ""
+    # OTLP transport protocol — only "grpc" is currently supported
+    protocol: "grpc"
+    # Disable TLS to the collector
+    # Set true only for in-cluster collectors on a trusted network
+    insecure: false
+    # Trace sampling ratio (0.0-1.0). 1.0 = sample all spans
+    sampleRate: 1.0
+    # OTLP exporter timeout
+    exporterTimeout: "10s"
 
   # ---------------------------------------------------------------------------
   # OIDC configuration
