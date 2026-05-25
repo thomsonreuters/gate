@@ -84,6 +84,8 @@ type ExchangeRequest struct {
 }
 
 // ExchangeResponse represents a successful token exchange result.
+// Fields tagged `json:"-"` are populated for internal observers
+// (logging, metrics) and never serialized to the API client.
 type ExchangeResponse struct {
 	Token         string            `json:"token"`
 	ExpiresAt     time.Time         `json:"expires_at"`
@@ -91,8 +93,11 @@ type ExchangeResponse struct {
 	Permissions   map[string]string `json:"permissions"`
 	RequestID     string            `json:"request_id"`
 
-	Issuer  string `json:"-"`
-	Subject string `json:"-"`
+	Issuer    string `json:"-"`
+	Subject   string `json:"-"`
+	ClientID  string `json:"-"`
+	TokenHash string `json:"-"`
+	TTL       int    `json:"-"`
 }
 
 // Service orchestrates the complete STS token exchange workflow.
@@ -145,7 +150,7 @@ func NewService(cfg *config.Config, dependencies Dependencies) (*Service, error)
 		return nil, fmt.Errorf("creating GitHub clients: %w", err)
 	}
 
-	auth, err := authorizer.NewAuthorizer(&cfg.Policy, dependencies.Selector, clients, dependencies.Logger)
+	auth, err := authorizer.NewAuthorizer(&cfg.Policy, dependencies.Selector, clients)
 	if err != nil {
 		return nil, fmt.Errorf("creating authorizer: %w", err)
 	}
@@ -196,16 +201,73 @@ func buildGitHubClients(cfg *config.Config) (map[string]github.ClientIface, erro
 	return clients, nil
 }
 
-// Exchange exchanges an OIDC token for a GitHub installation token.
-// It validates the OIDC token, authorizes the request against policies,
-// selects an appropriate GitHub App, and generates a scoped token.
-// All operations are audited and rate-limited.
+// logExchange emits one structured log line per Exchange call.
+func (s *Service) logExchange(ctx context.Context, requestID string, req *ExchangeRequest, resp *ExchangeResponse, err error) {
+	if err == nil && resp != nil {
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "token exchange granted",
+			slog.String("request_id", requestID),
+			slog.String("repository", req.TargetRepository),
+			slog.String("issuer", resp.Issuer),
+			slog.String("subject", resp.Subject),
+			slog.String("policy", resp.MatchedPolicy),
+			slog.String("client_id", resp.ClientID),
+			slog.String("token_hash", resp.TokenHash),
+			slog.Int("ttl", resp.TTL),
+			slog.Time("expires_at", resp.ExpiresAt),
+			slog.Int("permissions_count", len(resp.Permissions)),
+		)
+		return
+	}
+
+	var exErr *ExchangeError
+	if errors.As(err, &exErr) {
+		attrs := []slog.Attr{
+			slog.String("request_id", exErr.RequestID),
+			slog.String("repository", req.TargetRepository),
+			slog.String("code", exErr.Code),
+			slog.String("message", exErr.Message),
+		}
+		if exErr.Issuer != "" {
+			attrs = append(attrs, slog.String("issuer", exErr.Issuer))
+		}
+		if exErr.Subject != "" {
+			attrs = append(attrs, slog.String("subject", exErr.Subject))
+		}
+		if exErr.Details != "" {
+			attrs = append(attrs, slog.String("details", exErr.Details))
+		}
+		level := slog.LevelWarn
+		if exErr.Code == ErrInternalError {
+			level = slog.LevelError
+		}
+		s.logger.LogAttrs(ctx, level, "token exchange denied", attrs...)
+		return
+	}
+
+	// Defensive: every Exchange exit returns nil or *ExchangeError today.
+	s.logger.ErrorContext(ctx, "token exchange failed",
+		"request_id", requestID,
+		"repository", req.TargetRepository,
+		"error", err,
+	)
+}
+
+// Exchange exchanges an OIDC token for a GitHub installation token,
+// emitting one structured log line per call.
 func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeRequest) (*ExchangeResponse, error) {
-	if err := s.validateRequest(req); err != nil {
+	resp, err := s.exchange(ctx, requestID, req)
+	s.logExchange(ctx, requestID, req, resp, err)
+	return resp, err
+}
+
+// exchange performs the OIDC validation, authorization, app selection,
+// and token mint. The public Exchange wraps this with outcome logging.
+func (s *Service) exchange(ctx context.Context, requestID string, req *ExchangeRequest) (*ExchangeResponse, error) {
+	if validationErr := s.validateRequest(req); validationErr != nil {
 		return nil, &ExchangeError{
 			Code:      ErrInvalidRequest,
 			Message:   "Invalid request",
-			Details:   err.Error(),
+			Details:   validationErr.Error(),
 			RequestID: requestID,
 		}
 	}
@@ -224,6 +286,12 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}
 	}
 	validateSpan.SetAttributes(attribute.String("issuer", claims.Issuer))
+	s.logger.LogAttrs(ctx, slog.LevelDebug, "oidc validated",
+		slog.String("request_id", requestID),
+		slog.String("issuer", claims.Issuer),
+		slog.String("subject", claims.Subject),
+		slog.Time("expires_at", claims.ExpiresAt),
+	)
 
 	authReq := &authorizer.Request{
 		Claims:               claimsToMap(claims),
@@ -273,6 +341,10 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		}).WithCaller(claims.Issuer, claims.Subject)
 	}
 	selectSpan.SetAttributes(attribute.String("client_id", app.ClientID))
+	s.logger.LogAttrs(ctx, slog.LevelDebug, "github app selected",
+		slog.String("request_id", requestID),
+		slog.String("client_id", app.ClientID),
+	)
 
 	client, ok := s.clients[app.ClientID]
 	if !ok {
@@ -334,6 +406,9 @@ func (s *Service) Exchange(ctx context.Context, requestID string, req *ExchangeR
 		RequestID:     requestID,
 		Issuer:        claims.Issuer,
 		Subject:       claims.Subject,
+		ClientID:      app.ClientID,
+		TokenHash:     tokenHash,
+		TTL:           result.EffectiveTTL,
 	}, nil
 }
 

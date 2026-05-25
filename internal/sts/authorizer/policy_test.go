@@ -17,7 +17,6 @@ package authorizer
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -128,7 +127,7 @@ func TestPolicyCache_CachedHit(t *testing.T) {
 	sel, _ := selector.NewSelector([]selector.App{app}, backends.NewMemoryStore())
 	cfg := baseConfig(map[string]string{"contents": "write", "packages": "write"})
 
-	authorizer, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m}, slog.Default())
+	authorizer, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m})
 	require.NoError(t, err)
 
 	req := &Request{
@@ -160,7 +159,7 @@ func TestFetchPolicy_YMLFallback(t *testing.T) {
 
 	cfg := baseConfig(map[string]string{"contents": "write", "packages": "write"})
 	cfg.TrustPolicyPath = ".github/gate/trust-policy" // extension-less to trigger .yml fallback
-	authorizer, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m}, slog.Default())
+	authorizer, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m})
 	require.NoError(t, err)
 
 	result := authorizer.Authorize(t.Context(), &Request{
@@ -181,7 +180,7 @@ func TestAuthorize_CancelledContext(t *testing.T) {
 	m := &github.MockClient{}
 	m.On("GetContents", mock.Anything, mock.Anything, mock.Anything).
 		Return(nil, context.Canceled)
-	authorizer, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m}, slog.Default())
+	authorizer, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(t.Context())
