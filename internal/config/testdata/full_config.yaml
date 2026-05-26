@@ -34,7 +34,7 @@ oidc:
 audit:
   backend: sql
   sql:
-    dsn: "postgres://gate:secret@db.example.com:5432/gate?sslmode=require"
+    dsn: "postgres://gate:secret@db.example.com:5432/gate?sslmode=require" # trufflehog:ignore
 
 selector:
   type: redis

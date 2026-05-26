@@ -16,7 +16,6 @@ package authorizer
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,7 +77,7 @@ func buildAuthorizer(t *testing.T, cfg *config.PolicyConfig, policyFile string) 
 	m := newMockClient(t, policyFile)
 	clients := map[string]github.ClientIface{"client-1": m}
 
-	a, err := NewAuthorizer(cfg, sel, clients, slog.Default())
+	a, err := NewAuthorizer(cfg, sel, clients)
 	require.NoError(t, err)
 	return a
 }
@@ -112,7 +111,7 @@ func TestNewAuthorizer_InvalidClaimPattern(t *testing.T) {
 	cfg.Providers[0].RequiredClaims = map[string]string{
 		"repo": "[invalid",
 	}
-	_, err := NewAuthorizer(cfg, nil, nil, slog.Default())
+	_, err := NewAuthorizer(cfg, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid claim pattern")
 }
@@ -379,7 +378,7 @@ func TestLayer2_RepositoryOrInstallationNotFound(t *testing.T) {
 			m := &github.MockClient{}
 			m.On("GetContents", mock.Anything, mock.Anything, mock.Anything).Return(nil, tt.fetchErr)
 
-			a, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m}, slog.Default())
+			a, err := NewAuthorizer(cfg, sel, map[string]github.ClientIface{"client-1": m})
 			require.NoError(t, err)
 
 			result := a.Authorize(t.Context(), &Request{

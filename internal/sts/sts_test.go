@@ -15,6 +15,7 @@
 package sts
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"testing"
@@ -361,4 +362,160 @@ func TestRevokeExpiredTokens_RetryOnNextRun(t *testing.T) {
 	assert.Empty(t, expired, "token should be removed after successful retry")
 
 	client.AssertNumberOfCalls(t, "RevokeToken", 2)
+}
+
+// recordingHandler captures slog records for inspection in tests.
+type recordingHandler struct {
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r)
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func recordAttrs(r slog.Record) map[string]any {
+	out := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		out[a.Key] = a.Value.Any()
+		return true
+	})
+	return out
+}
+
+func TestLogExchange(t *testing.T) {
+	t.Parallel()
+
+	expires := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+	req := &ExchangeRequest{TargetRepository: "owner/repo"}
+
+	tests := []struct {
+		name       string
+		requestID  string
+		resp       *ExchangeResponse
+		err        error
+		wantLevel  slog.Level
+		wantMsg    string
+		wantAttrs  map[string]any
+		absentKeys []string
+	}{
+		{
+			name:      "success_full_context",
+			requestID: "req-1",
+			resp: &ExchangeResponse{
+				MatchedPolicy: "default",
+				Permissions:   map[string]string{"contents": "read", "metadata": "read"},
+				ExpiresAt:     expires,
+				RequestID:     "req-1",
+				Issuer:        "https://issuer.example",
+				Subject:       "repo:owner/repo:ref:refs/heads/main",
+				ClientID:      "Iv1.client",
+				TokenHash:     "abc123",
+				TTL:           900,
+			},
+			wantLevel: slog.LevelInfo,
+			wantMsg:   "token exchange granted",
+			wantAttrs: map[string]any{
+				"request_id":        "req-1",
+				"repository":        "owner/repo",
+				"issuer":            "https://issuer.example",
+				"subject":           "repo:owner/repo:ref:refs/heads/main",
+				"policy":            "default",
+				"client_id":         "Iv1.client",
+				"token_hash":        "abc123",
+				"ttl":               int64(900),
+				"permissions_count": int64(2),
+				"expires_at":        expires,
+			},
+		},
+		{
+			name:      "denial_with_caller_warn",
+			requestID: "req-2",
+			err: (&ExchangeError{
+				Code:      ErrPolicyNotFound,
+				Message:   "no matching policy",
+				Details:   "subject did not match any rule",
+				RequestID: "req-2",
+			}).WithCaller("https://issuer.example", "repo:owner/repo:ref:refs/heads/main"),
+			wantLevel: slog.LevelWarn,
+			wantMsg:   "token exchange denied",
+			wantAttrs: map[string]any{
+				"request_id": "req-2",
+				"repository": "owner/repo",
+				"issuer":     "https://issuer.example",
+				"subject":    "repo:owner/repo:ref:refs/heads/main",
+				"code":       ErrPolicyNotFound,
+				"message":    "no matching policy",
+				"details":    "subject did not match any rule",
+			},
+		},
+		{
+			name:      "internal_error_escalates_to_error_level",
+			requestID: "req-3",
+			err: (&ExchangeError{
+				Code:      ErrInternalError,
+				Message:   "Audit log failed",
+				Details:   "db connection refused",
+				RequestID: "req-3",
+			}).WithCaller("https://issuer.example", "sub"),
+			wantLevel: slog.LevelError,
+			wantMsg:   "token exchange denied",
+			wantAttrs: map[string]any{
+				"code":    ErrInternalError,
+				"message": "Audit log failed",
+				"details": "db connection refused",
+			},
+		},
+		{
+			name:      "denial_without_caller_omits_caller_fields",
+			requestID: "req-4",
+			err: &ExchangeError{
+				Code:      ErrInvalidRequest,
+				Message:   "Invalid request",
+				RequestID: "req-4",
+			},
+			wantLevel:  slog.LevelWarn,
+			wantMsg:    "token exchange denied",
+			wantAttrs:  map[string]any{"code": ErrInvalidRequest},
+			absentKeys: []string{"issuer", "subject", "details"},
+		},
+		{
+			name:      "non_exchange_error_falls_through_to_failed",
+			requestID: "req-5",
+			err:       errors.New("unexpected"),
+			wantLevel: slog.LevelError,
+			wantMsg:   "token exchange failed",
+			wantAttrs: map[string]any{
+				"request_id": "req-5",
+				"repository": "owner/repo",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := &recordingHandler{}
+			svc := &Service{logger: slog.New(h)}
+
+			svc.logExchange(t.Context(), tt.requestID, req, tt.resp, tt.err)
+
+			require.Len(t, h.records, 1, "expected exactly one log record")
+			rec := h.records[0]
+			assert.Equal(t, tt.wantLevel, rec.Level, "log level")
+			assert.Equal(t, tt.wantMsg, rec.Message, "log message")
+
+			got := recordAttrs(rec)
+			for k, v := range tt.wantAttrs {
+				assert.Equal(t, v, got[k], "attr %q", k)
+			}
+			for _, k := range tt.absentKeys {
+				_, present := got[k]
+				assert.False(t, present, "attr %q should be absent", k)
+			}
+		})
+	}
 }

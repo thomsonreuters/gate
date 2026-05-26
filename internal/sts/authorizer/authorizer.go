@@ -24,7 +24,6 @@ package authorizer
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"time"
 
@@ -43,7 +42,6 @@ type Authorizer struct {
 	fetchSF  singleflight.Group
 	patterns map[string]*regexp.Regexp
 	now      func() time.Time
-	logger   *slog.Logger
 }
 
 // NewAuthorizer creates an authorizer. Claim patterns from provider configs
@@ -52,12 +50,7 @@ func NewAuthorizer(
 	cfg *config.PolicyConfig,
 	sel *selector.Selector,
 	clients map[string]github.ClientIface,
-	logger *slog.Logger,
 ) (*Authorizer, error) {
-	if logger == nil {
-		logger = slog.Default()
-	}
-
 	patterns, err := compileClaimPatterns(cfg.Providers)
 	if err != nil {
 		return nil, err
@@ -70,7 +63,6 @@ func NewAuthorizer(
 		cache:    newPolicyCache(0),
 		patterns: patterns,
 		now:      time.Now,
-		logger:   logger,
 	}, nil
 }
 
@@ -140,28 +132,8 @@ func (a *Authorizer) Authorize(ctx context.Context, req *Request) *Result {
 	}
 
 	if denial := a.authorizeCentral(req); denial != nil {
-		return a.logResult(ctx, req, denied(denial))
+		return denied(denial)
 	}
 
-	return a.logResult(ctx, req, a.authorizeRepository(ctx, req))
-}
-
-// logResult logs the authorization result and returns it unchanged.
-func (a *Authorizer) logResult(ctx context.Context, req *Request, r *Result) *Result {
-	if r.Allowed {
-		a.logger.LogAttrs(ctx, slog.LevelInfo, "authorization granted",
-			slog.String("policy", r.MatchedPolicy),
-			slog.String("repository", req.TargetRepository),
-			slog.Int("ttl", r.EffectiveTTL),
-		)
-	} else {
-		a.logger.LogAttrs(ctx, slog.LevelWarn, "authorization denied",
-			slog.String("code", string(r.DenyReason.Code)),
-			slog.String("message", r.DenyReason.Message),
-			slog.String("details", r.DenyReason.Details),
-			slog.String("issuer", req.Issuer),
-			slog.String("repository", req.TargetRepository),
-		)
-	}
-	return r
+	return a.authorizeRepository(ctx, req)
 }
