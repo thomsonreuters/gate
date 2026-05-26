@@ -817,7 +817,7 @@
               "enum": [
                 "grpc"
               ],
-              "description": "OTLP transport protocol \u2014 only grpc is supported"
+              "description": "OTLP transport protocol (only grpc is supported)"
             },
             "insecure": {
               "type": "boolean",
