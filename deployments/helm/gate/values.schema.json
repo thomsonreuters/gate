@@ -796,6 +796,45 @@
             }
           }
         },
+        "otel": {
+          "type": "object",
+          "description": "OpenTelemetry export pipeline (OTLP/gRPC) for traces, metrics, and logs",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable OpenTelemetry export"
+            },
+            "serviceName": {
+              "type": "string",
+              "description": "service.name resource attribute reported to the collector"
+            },
+            "endpoint": {
+              "type": "string",
+              "description": "OTLP/gRPC collector endpoint (host:port, no scheme). Required when enabled=true"
+            },
+            "protocol": {
+              "type": "string",
+              "enum": [
+                "grpc"
+              ],
+              "description": "OTLP transport protocol (only grpc is supported)"
+            },
+            "insecure": {
+              "type": "boolean",
+              "description": "Disable TLS to the collector (in-cluster only)"
+            },
+            "sampleRate": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0,
+              "description": "Trace sampling ratio (0.0-1.0); 1.0 samples all spans"
+            },
+            "exporterTimeout": {
+              "type": "string",
+              "description": "OTLP exporter timeout (Go duration, e.g. 10s)"
+            }
+          }
+        },
         "oidc": {
           "type": "object",
           "description": "OIDC validation configuration",

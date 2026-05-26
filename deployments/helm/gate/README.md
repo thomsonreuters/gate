@@ -373,6 +373,37 @@ GATE also logs the FIPS status at startup, which can be verified in pod logs:
 kubectl logs -l app.kubernetes.io/name=gate -n gate | grep "FIPS 140-3"
 ```
 
+### OpenTelemetry
+
+GATE can export traces, metrics, and logs to an OpenTelemetry collector via OTLP/gRPC. Application logs continue to be written to stdout regardless.
+
+Enable export in your values, pointing at a reachable collector:
+
+```yaml
+config:
+  otel:
+    enabled: true
+    endpoint: "otel-collector.observability.svc:4317"
+    serviceName: "gate"
+    insecure: false       # set true only for in-cluster collectors on a trusted network
+    sampleRate: 1.0       # 1.0 samples all spans; lower to e.g. 0.1 in high-volume environments
+    exporterTimeout: "10s"
+```
+
+When `networkPolicy.enabled=true`, also add an egress rule for the collector port. There is a commented example in `values.yaml`:
+
+```yaml
+networkPolicy:
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 4317   # OTLP/gRPC (only protocol currently supported)
+```
+
+If `otel.enabled=true` is set without an `endpoint`, the application fails validation at startup. The endpoint must be `host:port` without a scheme — TLS behavior is controlled by `insecure`.
+
 ### Resource limits
 
 Adjust CPU and memory based on your expected load. The defaults are conservative starting points:
@@ -665,6 +696,18 @@ externalSecrets:
 |-----------|-------------|---------|
 | `config.fips.enabled` | Enable FIPS 140-3 mode (requires FIPS-compiled image) | `false` |
 | `config.fips.mode` | FIPS mode: `on` or `only` | `on` |
+
+### OpenTelemetry parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `config.otel.enabled` | Enable OpenTelemetry export (traces, metrics, logs) via OTLP/gRPC | `false` |
+| `config.otel.serviceName` | `service.name` resource attribute | `gate` |
+| `config.otel.endpoint` | OTLP/gRPC collector endpoint, `host:port` (required when enabled) | `""` |
+| `config.otel.protocol` | OTLP transport protocol (only `grpc` supported) | `grpc` |
+| `config.otel.insecure` | Disable TLS to the collector (in-cluster only) | `false` |
+| `config.otel.sampleRate` | Trace sampling ratio (0.0–1.0) | `1.0` |
+| `config.otel.exporterTimeout` | OTLP exporter timeout (Go duration) | `10s` |
 
 ### GitHub Apps parameters
 
