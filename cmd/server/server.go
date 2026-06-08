@@ -98,7 +98,6 @@ func (s *Server) Init() error {
 	s.router.Use(otelhttp.NewMiddleware(constants.ProgramIdentifier))
 	s.router.Use(middlewares.ChiRouteLabeler)
 	s.router.Use(middleware.RequestID)
-	s.router.Use(middleware.RealIP)
 	s.router.Use(httplog.RequestLogger(slog.Default(), &httplog.Options{
 		Level:         slog.LevelInfo,
 		RecoverPanics: true,
