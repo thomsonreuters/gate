@@ -94,6 +94,8 @@ func (s *Server) Init() error {
 	}
 
 	s.router = chi.NewRouter()
+	s.router.Use(middlewares.NormalizePath)
+	s.router.Use(middleware.CleanPath)
 	s.router.Use(middleware.Heartbeat(healthPath))
 	s.router.Use(otelhttp.NewMiddleware(constants.ProgramIdentifier))
 	s.router.Use(middlewares.ChiRouteLabeler)
@@ -106,8 +108,6 @@ func (s *Server) Init() error {
 		},
 	}))
 	s.router.Use(middleware.Timeout(s.cfg.Server.RequestTimeout))
-	s.router.Use(middleware.StripSlashes)
-	s.router.Use(middleware.CleanPath)
 	s.router.Use(middleware.RequestSize(maxBodyBytes))
 	s.router.Use(middlewares.SecurityHeaders)
 
