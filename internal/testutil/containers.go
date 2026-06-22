@@ -26,7 +26,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/docker/go-connections/nat"
 	"github.com/golang-migrate/migrate/v4"
 	migratePostgres "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
@@ -104,7 +103,7 @@ func NewRedisContainer(t *testing.T) *redis.Client {
 	return client
 }
 
-// NewDynamoDBContainer starts a LocalStack container with DynamoDB and returns
+// NewDynamoDBContainer starts a MiniStack container with DynamoDB and returns
 // a connected client. It creates the standard tables (logs, rate_limits).
 // The container is terminated when the test finishes.
 func NewDynamoDBContainer(t *testing.T) *dynamodb.Client {
@@ -112,10 +111,7 @@ func NewDynamoDBContainer(t *testing.T) *dynamodb.Client {
 	ctx := context.Background()
 
 	container, err := tcLocalstack.Run(ctx,
-		"localstack/localstack:latest",
-		testcontainers.WithEnv(map[string]string{
-			"SERVICES": "dynamodb",
-		}),
+		"ministackorg/ministack:latest",
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("Ready.").WithStartupTimeout(60*time.Second)),
 	)
@@ -125,7 +121,7 @@ func NewDynamoDBContainer(t *testing.T) *dynamodb.Client {
 	host, err := container.Host(ctx)
 	require.NoError(t, err)
 
-	port, err := container.MappedPort(ctx, nat.Port("4566/tcp"))
+	port, err := container.MappedPort(ctx, "4566/tcp")
 	require.NoError(t, err)
 
 	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())

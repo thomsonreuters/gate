@@ -41,7 +41,9 @@ updates:
           - "*"
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/local"
     schedule:
       interval: "monthly"
     target-branch: "main"
@@ -49,5 +51,17 @@ updates:
       default-days: 10
     groups:
       docker:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "docker-compose"
+    directory: "/local"
+    schedule:
+      interval: "monthly"
+    target-branch: "main"
+    cooldown:
+      default-days: 10
+    groups:
+      docker-compose:
         patterns:
           - "*"

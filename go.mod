@@ -10,7 +10,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.20.40
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.57.4
 	github.com/coreos/go-oidc/v3 v3.18.0
-	github.com/docker/go-connections v0.7.0
 	github.com/ggicci/httpin v0.20.3
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/httplog/v3 v3.3.0
@@ -85,6 +84,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
+	github.com/docker/go-connections v0.7.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
