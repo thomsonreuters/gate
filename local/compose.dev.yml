@@ -52,7 +52,7 @@ services:
         condition: service_started
 
   ministack:
-    image: ministackorg/ministack:latest@sha256:a8dbc4d62f348edd328f18b67d6c082b65568f351792e202805780d9110c79e9
+    image: ministackorg/ministack:1.3.66@sha256:a64f3c3bebff231aa4b6839a5ed4b0c9cffe02dc20bcee0b1b2d440dc3160cea
     container_name: gate-ministack
     hostname: ministack
     ports:
