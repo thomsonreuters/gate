@@ -300,8 +300,8 @@ dev-init:
 .PHONY: dev-deps
 dev-deps:
 	@echo "Starting service dependencies..."
-	$(COMPOSE_CMD) up -d postgres redis redis-insight localstack adminer aspire-dashboard
-	@echo "Dependencies started (postgres:5432, redis:6379, redis-insight:5540, localstack/dynamodb:4566, adminer:8081, aspire-dashboard:18888)"
+	$(COMPOSE_CMD) up -d postgres redis redis-insight ministack adminer aspire-dashboard
+	@echo "Dependencies started (postgres:5432, redis:6379, redis-insight:5540, ministack/dynamodb:4566, adminer:8081, aspire-dashboard:18888)"
 
 .PHONY: dev
 dev: dev-deps
