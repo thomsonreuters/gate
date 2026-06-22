@@ -14,7 +14,7 @@
 
 services:
   postgres:
-    image: postgres:18.3@sha256:69e8582b781cb44fa4557b98ed586fe68361e320d9b12f9707494335634f4f3d
+    image: postgres:18.4@sha256:29ee7bb30d804447dc9a91fd0d74322ae1dc3a4072cc6346f70a5ed6e783b565
     container_name: gate-postgres
     hostname: postgres
     environment:
@@ -33,7 +33,7 @@ services:
       start_period: 10s
 
   redis:
-    image: redis:8.6.1@sha256:1c054d54ecd1597bba52f4304bca5afbc5565ebe614c5b3d7dc5b7f8a0cd768d
+    image: redis:8.8.0@sha256:0a972391db0b24ec336e35d1bc98b237237e26f82bf5120cf2f6b1688d1df973
     container_name: gate-redis
     hostname: redis
     ports:
@@ -42,7 +42,7 @@ services:
       - ./.volumes/redis:/data
 
   redis-insight:
-    image: redis/redisinsight:3.2.0@sha256:55542a762210bb1cd681410282642bac0970f780f39bc134565394a81b1f1fd9
+    image: redis/redisinsight:3.6.0@sha256:aa21bbd198455b4ad964f76782db951155aa0d712321f599972d1525f031f0e6
     container_name: gate-redis-insight
     hostname: redis-insight
     ports:
@@ -70,7 +70,7 @@ services:
       start_period: 10s
 
   adminer:
-    image: adminer:5.4.2@sha256:2fb88b98da9f0ae0157d8fcb73f447a0747b09ee8d2ff8a8e0695b30afed2116
+    image: adminer:5.4.2@sha256:4dae499420bb9ba8c5d73745e5c8e02b696acd214b66b5f2946eceee7f171fee
     container_name: gate-adminer
     hostname: adminer
     ports:
@@ -114,7 +114,7 @@ services:
         condition: service_healthy
 
   aspire-dashboard:
-    image: mcr.microsoft.com/dotnet/aspire-dashboard:13.3.0@sha256:e0e94bec1fdd27ce2ab304ef954b2cd83d68f91dc1028199d251a0fab83eb17a
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:13.4.2@sha256:cb04a30c7b815476474184564635f60c206d78855261731d8d99a6549bbf483a
     container_name: gate-aspire-dashboard
     hostname: aspire-dashboard
     ports:
