@@ -143,6 +143,17 @@ tolerations: []
 
 affinity: {}
 
+# Topology spread constraints for distributing pods across nodes/zones.
+# Example (soft spread across nodes, never blocks scheduling):
+#   topologySpreadConstraints:
+#     - maxSkew: 1
+#       topologyKey: kubernetes.io/hostname
+#       whenUnsatisfiable: ScheduleAnyway
+#       labelSelector:
+#         matchLabels:
+#           app.kubernetes.io/name: gate
+topologySpreadConstraints: []
+
 # -----------------------------------------------------------------------------
 # Service configuration
 # -----------------------------------------------------------------------------

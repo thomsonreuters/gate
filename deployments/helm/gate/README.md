@@ -626,6 +626,7 @@ externalSecrets:
 | `nodeSelector` | Node selector for pod scheduling | `{}` |
 | `tolerations` | Tolerations for pod scheduling | `[]` |
 | `affinity` | Affinity rules (includes pod anti-affinity by default) | See values.yaml |
+| `topologySpreadConstraints` | Topology spread constraints for distributing pods across nodes/zones | `[]` |
 
 ### Service parameters
 

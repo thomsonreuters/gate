@@ -367,6 +367,56 @@
         }
       }
     },
+    "topologySpreadConstraints": {
+      "type": "array",
+      "description": "Topology spread constraints for distributing pods across nodes/zones",
+      "items": {
+        "type": "object",
+        "properties": {
+          "maxSkew": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "topologyKey": {
+            "type": "string"
+          },
+          "whenUnsatisfiable": {
+            "type": "string",
+            "enum": [
+              "DoNotSchedule",
+              "ScheduleAnyway"
+            ]
+          },
+          "labelSelector": {
+            "type": "object"
+          },
+          "minDomains": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "matchLabelKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "nodeAffinityPolicy": {
+            "type": "string",
+            "enum": [
+              "Honor",
+              "Ignore"
+            ]
+          },
+          "nodeTaintsPolicy": {
+            "type": "string",
+            "enum": [
+              "Honor",
+              "Ignore"
+            ]
+          }
+        }
+      }
+    },
     "service": {
       "type": "object",
       "description": "Kubernetes Service configuration",
