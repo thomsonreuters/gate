@@ -31,10 +31,11 @@ func newResource(cfg *config.OTelConfig) (*resource.Resource, error) {
 		serviceName = constants.ProgramIdentifier
 	}
 
+	// Empty SchemaURL: inherit the SDK's on merge, avoiding lockstep semconv bumps.
 	return resource.Merge(
 		resource.Default(),
 		resource.NewWithAttributes(
-			semconv.SchemaURL,
+			"",
 			semconv.ServiceName(serviceName),
 			semconv.ServiceVersion(constants.Version),
 		),
