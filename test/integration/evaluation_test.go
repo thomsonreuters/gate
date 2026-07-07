@@ -350,6 +350,64 @@ func TestEvaluation_SubjectClaimPatternMatching(t *testing.T) {
 	})
 }
 
+// TestEvaluation_NestedClaimMatching verifies that a claim addressed by a
+// dotted path into a nested object is correctly matched against policy conditions.
+func TestEvaluation_NestedClaimMatching(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]any
+		matches  bool
+	}{
+		{
+			name: "nested value matches",
+			metadata: map[string]any{
+				"preferences": map[string]any{"theme": "dark"},
+			},
+			matches: true,
+		},
+		{
+			name: "nested value does not match",
+			metadata: map[string]any{
+				"preferences": map[string]any{"theme": "light"},
+			},
+			matches: false,
+		},
+		{
+			name:     "missing nested object does not match",
+			metadata: nil,
+			matches:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := harness.New(t)
+
+			harness.StartServer(t, ctx)
+
+			ctx.SetupPolicy(harness.DefaultRepo, "nested_claim.tpl.yaml")
+
+			overrides := map[string]any{}
+			if tt.metadata != nil {
+				overrides["app_metadata"] = tt.metadata
+			}
+
+			got, err := ctx.Client.Exchange(t.Context(), &harness.ExchangeRequest{
+				OIDCToken:        ctx.TokenWith(overrides),
+				TargetRepository: harness.DefaultRepo,
+			})
+			require.NoError(t, err)
+
+			if tt.matches {
+				require.Nil(t, got.Error)
+			} else {
+				require.NotNil(t, got.Error)
+				assert.Equal(t, string(authorizer.ErrNoRulesMatched), got.Error.Code)
+			}
+		})
+	}
+}
+
 // TestEvaluation_ORLogicMultipleConditions verifies that OR logic with
 // multiple conditions correctly matches when any condition is satisfied.
 func TestEvaluation_ORLogicMultipleConditions(t *testing.T) {
