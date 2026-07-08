@@ -88,7 +88,7 @@ func lookupClaim(claims map[string]any, name string) (any, bool) {
 		return v, true
 	}
 	var current any = claims
-	for _, segment := range strings.Split(name, ".") {
+	for segment := range strings.SplitSeq(name, ".") {
 		obj, ok := current.(map[string]any)
 		if !ok {
 			return nil, false
