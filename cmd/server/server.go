@@ -114,7 +114,9 @@ func (s *Server) Init() error {
 	s.router.Route("/api/v1", func(r chi.Router) {
 		r.Use(middlewares.OriginVerify(s.cfg.Origin))
 		r.Get("/info", infoHandler.GetInfo)
-		r.With(httpin.NewInput(handlers.ExchangeInput{})).Post("/exchange", exchangeHandler.Exchange)
+		r.With(httpin.NewInput(handlers.ExchangeInput{},
+			httpin.Option.WithErrorHandler(handlers.SanitizedInputErrorHandler),
+		)).Post("/exchange", exchangeHandler.Exchange)
 	})
 
 	return nil

@@ -97,6 +97,22 @@ func NewExchangeHandler(service sts.Exchanger) (*ExchangeHandler, error) {
 	}, nil
 }
 
+// SanitizedInputErrorHandler returns a safe error response without exposing internal details.
+func SanitizedInputErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	requestID := middleware.GetReqID(r.Context())
+	slog.WarnContext(r.Context(), "request body decode failed",
+		slog.String("request_id", requestID),
+		slog.String("path", r.URL.Path),
+		slog.Any("error", err),
+	)
+	render.Status(r, http.StatusBadRequest)
+	render.JSON(w, r, &ErrorResponse{
+		Code:      sts.ErrInvalidRequest,
+		Message:   "Invalid request",
+		RequestID: requestID,
+	})
+}
+
 // httpStatusCode maps STS error codes to HTTP status codes for API responses.
 func httpStatusCode(code string) int {
 	switch code {
