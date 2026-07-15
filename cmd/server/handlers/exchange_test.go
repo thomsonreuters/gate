@@ -15,6 +15,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ggicci/httpin"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/thomsonreuters/gate/internal/sts"
@@ -243,4 +245,43 @@ func TestExchange_NonExchangeError(t *testing.T) {
 	var resp ErrorResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, sts.ErrInternalError, resp.Code)
+}
+
+func TestSanitizedInputErrorHandler_MalformedBody(t *testing.T) {
+	t.Parallel()
+
+	h, hErr := NewExchangeHandler(&mockService{})
+	require.NoError(t, hErr)
+
+	r := chi.NewRouter()
+	r.With(httpin.NewInput(ExchangeInput{},
+		httpin.Option.WithErrorHandler(SanitizedInputErrorHandler),
+	)).Post("/api/v1/exchange", h.Exchange)
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"permissions is string", `{"oidc_token":"x","target_repository":"a/b","requested_permissions":"admin"}`},
+		{"permissions is array", `{"oidc_token":"x","target_repository":"a/b","requested_permissions":["admin"]}`},
+		{"permissions value is bool", `{"oidc_token":"x","target_repository":"a/b","requested_permissions":{"contents":true}}`},
+		{"permissions value is number", `{"oidc_token":"x","target_repository":"a/b","requested_permissions":{"contents":42}}`},
+		{"body is not json", `not-json`},
+		{"ttl is string", `{"oidc_token":"x","target_repository":"a/b","requested_ttl":"forever"}`},
+	}
+
+	wantBody := `{"error_code":"INVALID_REQUEST","error":"Invalid request","request_id":""}`
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/exchange", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.JSONEq(t, wantBody, w.Body.String())
+		})
+	}
 }
