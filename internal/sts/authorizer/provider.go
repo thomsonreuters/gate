@@ -71,13 +71,33 @@ func (a *Authorizer) authorizeCentral(req *Request) *DenialError {
 }
 
 // claimString returns the claim value as a string and whether it was present and a string.
+// A dotted name such as "app_metadata.preferences.theme" is resolved by walking nested claim objects.
 func claimString(claims map[string]any, name string) (string, bool) {
-	v, ok := claims[name]
+	v, ok := lookupClaim(claims, name)
 	if !ok {
 		return "", false
 	}
 	s, ok := v.(string)
 	return s, ok
+}
+
+// lookupClaim resolves a claim by name, treating dots as a path into nested objects.
+// A literal top-level key takes precedence over path traversal so flat claims are unaffected.
+func lookupClaim(claims map[string]any, name string) (any, bool) {
+	if v, ok := claims[name]; ok {
+		return v, true
+	}
+	var current any = claims
+	for segment := range strings.SplitSeq(name, ".") {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		if current, ok = obj[segment]; !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 // findProvider returns the provider config for the given issuer, or nil if not found.
