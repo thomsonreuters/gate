@@ -28,14 +28,14 @@ import (
 func TestNewInfoHandler(t *testing.T) {
 	t.Parallel()
 
-	h := NewInfoHandler()
+	h := NewInfoHandler("abc")
 	assert.NotNil(t, h)
 }
 
 func TestInfoHandler_GetInfo(t *testing.T) {
 	t.Parallel()
 
-	h := NewInfoHandler()
+	h := NewInfoHandler("abc")
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/info", nil)
@@ -48,4 +48,5 @@ func TestInfoHandler_GetInfo(t *testing.T) {
 	var got InfoResponse
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&got))
 	assert.Equal(t, fips140.Enabled(), got.FIPSEnabled)
+	assert.Equal(t, "abc", got.ProvidersSHA256)
 }

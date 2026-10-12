@@ -21,22 +21,27 @@ import (
 	"github.com/go-chi/render"
 )
 
-// InfoHandler serves build and version information.
-type InfoHandler struct{}
+// InfoHandler serves build and configuration information.
+type InfoHandler struct {
+	providersSHA256 string
+}
 
 // InfoResponse is the JSON body returned by the info endpoint.
 type InfoResponse struct {
-	FIPSEnabled bool `json:"fips_enabled"`
+	FIPSEnabled     bool   `json:"fips_enabled"`
+	ProvidersSHA256 string `json:"providers_sha256"`
 }
 
-// NewInfoHandler creates an InfoHandler.
-func NewInfoHandler() *InfoHandler {
-	return &InfoHandler{}
+// NewInfoHandler creates an InfoHandler reporting providersSHA256, the
+// fingerprint of the trusted issuers (see config.PolicyConfig.IssuersFingerprint).
+func NewInfoHandler(providersSHA256 string) *InfoHandler {
+	return &InfoHandler{providersSHA256: providersSHA256}
 }
 
-// GetInfo writes build and version information as JSON.
-func (InfoHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
+// GetInfo writes build and configuration information as JSON.
+func (h *InfoHandler) GetInfo(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, &InfoResponse{
-		FIPSEnabled: fips140.Enabled(),
+		FIPSEnabled:     fips140.Enabled(),
+		ProvidersSHA256: h.providersSHA256,
 	})
 }
