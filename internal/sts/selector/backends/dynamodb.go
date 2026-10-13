@@ -121,8 +121,7 @@ func (d *DynamoDBStore) SetState(ctx context.Context, clientID string, state *se
 		},
 	})
 	if err != nil {
-		var condErr *types.ConditionalCheckFailedException
-		if errors.As(err, &condErr) {
+		if _, ok := errors.AsType[*types.ConditionalCheckFailedException](err); ok {
 			return nil
 		}
 		return fmt.Errorf("putting item: %w", err)

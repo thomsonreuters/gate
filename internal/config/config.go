@@ -136,8 +136,7 @@ func Load(ctx context.Context, configPath string) (*Config, error) {
 	v := cfg.getViper(configPath)
 
 	if err := v.ReadInConfig(); err != nil {
-		var notFoundErr viper.ConfigFileNotFoundError
-		if errors.As(err, &notFoundErr) {
+		if _, ok := errors.AsType[viper.ConfigFileNotFoundError](err); ok {
 			slog.WarnContext(ctx, "No config file found, relying on env vars/defaults")
 		} else {
 			return nil, err

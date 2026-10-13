@@ -177,8 +177,7 @@ func (h *ExchangeHandler) Exchange(w http.ResponseWriter, r *http.Request) {
 
 	response, err := h.service.Exchange(ctx, requestID, &input.Body)
 	if err != nil {
-		var exErr *sts.ExchangeError
-		if errors.As(err, &exErr) {
+		if exErr, ok := errors.AsType[*sts.ExchangeError](err); ok {
 			callerIssuer = exErr.Issuer
 			callerSubject = exErr.Subject
 			outcome = h.writeError(w, r, span, exErr.Code, exErr.Message, exErr.RequestID, exErr.RetryAfterSeconds, err)

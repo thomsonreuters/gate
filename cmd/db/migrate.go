@@ -205,8 +205,7 @@ func printVersion(ctx context.Context, m *migrate.Migrate) {
 // or wraps the original error with the migration direction for context.
 // Callers must check ErrNoChange before calling this function.
 func handleMigrateError(err error, direction string) error {
-	var dirtyErr migrate.ErrDirty
-	if errors.As(err, &dirtyErr) {
+	if dirtyErr, ok := errors.AsType[migrate.ErrDirty](err); ok {
 		return fmt.Errorf(
 			"database is in a dirty state at version %d; "+
 				"inspect the failed migration then run 'db migrate force --version %d' to reset",
