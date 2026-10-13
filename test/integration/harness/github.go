@@ -36,7 +36,7 @@ type GitHub struct {
 
 	mu            sync.RWMutex
 	policies      map[string]policy  // repo -> policy content
-	installations map[string]int64   // repo -> installation ID
+	installations map[string]int64   // owner -> installation ID
 	tokens        map[int64]token    // installation ID -> token config
 	errors        map[string]failure // path pattern -> error to return
 	requests      []Request          // recorded requests
@@ -127,12 +127,14 @@ func (g *GitHub) SetPolicyFromFile(repo, path string) {
 	g.SetPolicy(repo, string(content))
 }
 
-// SetInstallation configures the installation ID for a repository.
+// SetInstallation configures the installation ID for the owner of repo.
 func (g *GitHub) SetInstallation(repo string, id int64) {
+	owner, _, _ := strings.Cut(repo, "/")
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.installations[repo] = id
+	g.installations[owner] = id
 }
 
 // SetToken configures the token response for an installation.
@@ -224,7 +226,7 @@ func (g *GitHub) handler(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(path, "/repos/") && strings.Contains(path, "/contents/"):
 		g.handleContents(w, r)
-	case strings.HasPrefix(path, "/repos/") && strings.HasSuffix(path, "/installation"):
+	case (strings.HasPrefix(path, "/orgs/") || strings.HasPrefix(path, "/users/")) && strings.HasSuffix(path, "/installation"):
 		g.handleInstallation(w, r)
 	case strings.HasPrefix(path, "/app/installations/") && strings.HasSuffix(path, "/access_tokens"):
 		g.handleAccessToken(w, r)
@@ -296,19 +298,18 @@ func (g *GitHub) handleContents(w http.ResponseWriter, r *http.Request) {
 	g.writeJSON(w, http.StatusOK, response)
 }
 
-// handleInstallation handles GET /repos/{owner}/{repo}/installation requests.
+// handleInstallation handles GET /orgs/{owner}/installation and
+// GET /users/{owner}/installation requests.
 func (g *GitHub) handleInstallation(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/repos/"), "/installation")
-	parts := strings.Split(path, "/")
-	if len(parts) != 2 {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) != 3 {
 		g.writeError(w, http.StatusBadRequest, "Invalid path")
 		return
 	}
-
-	repo := fmt.Sprintf("%s/%s", parts[0], parts[1])
+	owner := parts[1]
 
 	g.mu.RLock()
-	id, ok := g.installations[repo]
+	id, ok := g.installations[owner]
 	g.mu.RUnlock()
 
 	if !ok {
@@ -316,13 +317,10 @@ func (g *GitHub) handleInstallation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := map[string]any{
-		"id":         id,
-		"account":    map[string]string{"login": parts[0]},
-		"repository": map[string]string{"full_name": repo},
-	}
-
-	g.writeJSON(w, http.StatusOK, response)
+	g.writeJSON(w, http.StatusOK, map[string]any{
+		"id":      id,
+		"account": map[string]string{"login": owner},
+	})
 }
 
 // handleAccessToken handles POST /app/installations/{id}/access_tokens requests.
