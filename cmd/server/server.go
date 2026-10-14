@@ -84,7 +84,7 @@ func (s *Server) Init() error {
 	s.closers = append(s.closers, closers...)
 	s.closers = append(s.closers, otelShutdownCloser(otelShutdown))
 
-	infoHandler := handlers.NewInfoHandler()
+	infoHandler := handlers.NewInfoHandler(s.cfg.Policy.IssuersFingerprint())
 	exchangeHandler, err := handlers.NewExchangeHandler(service)
 	if err != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

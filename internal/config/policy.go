@@ -15,6 +15,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -198,6 +200,19 @@ func (p *PolicyConfig) Issuers() []string {
 		issuers = append(issuers, prov.Issuer)
 	}
 	return issuers
+}
+
+// IssuersFingerprint returns the hex SHA-256 of the sorted, de-duplicated
+// issuer URLs, each terminated by a newline. It identifies the set of trusted
+// issuers independently of provider order.
+func (p *PolicyConfig) IssuersFingerprint() string {
+	issuers := p.Issuers()
+	slices.Sort(issuers)
+	h := sha256.New()
+	for _, issuer := range slices.Compact(issuers) {
+		h.Write([]byte(issuer + "\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // Validate validates the policy configuration.

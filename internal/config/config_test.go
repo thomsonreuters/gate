@@ -714,6 +714,35 @@ func TestPolicyConfig_Issuers(t *testing.T) {
 	}
 }
 
+func TestPolicyConfig_IssuersFingerprint(t *testing.T) {
+	t.Parallel()
+
+	const ab = "b525f61bd94d481dc331a1a4e4f77d3c5722c67c814722909ae36d1a4d52bec7"
+
+	tests := []struct {
+		name    string
+		issuers []string
+		want    string
+	}{
+		{name: "empty", issuers: nil, want: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+		{name: "sorted", issuers: []string{"https://a.example", "https://b.example"}, want: ab},
+		{name: "order independent", issuers: []string{"https://b.example", "https://a.example"}, want: ab},
+		{name: "duplicates ignored", issuers: []string{"https://b.example", "https://a.example", "https://b.example"}, want: ab},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			providers := make([]ProviderConfig, 0, len(tt.issuers))
+			for _, issuer := range tt.issuers {
+				providers = append(providers, ProviderConfig{Issuer: issuer, Name: issuer})
+			}
+			cfg := &PolicyConfig{Providers: providers}
+			assert.Equal(t, tt.want, cfg.IssuersFingerprint())
+		})
+	}
+}
+
 func TestProviderConfig_Validate(t *testing.T) {
 	t.Parallel()
 
