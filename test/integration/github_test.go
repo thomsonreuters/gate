@@ -38,7 +38,7 @@ func TestGitHub_ErrorScenarios(t *testing.T) {
 			name: "installation not found",
 			setup: func(ctx *harness.Context) {
 				ctx.SetupDefaultPolicy()
-				ctx.GitHub.SetError("/repos/example-org/example-repo/installation", 404, "Not Found")
+				ctx.GitHub.SetError("/example-org/installation", 404, "Not Found")
 			},
 			targetRepo: harness.DefaultRepo,
 			code:   authorizer.ErrRepositoryNotFound,
