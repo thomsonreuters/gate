@@ -111,9 +111,9 @@ func NewDynamoDBContainer(t *testing.T) *dynamodb.Client {
 	ctx := context.Background()
 
 	container, err := tcLocalstack.Run(ctx,
-		"ministackorg/ministack:latest",
+		"ministackorg/ministack:1.5.26",
 		testcontainers.WithWaitStrategy(
-			wait.ForLog("Ready.").WithStartupTimeout(60*time.Second)),
+			wait.ForLog("Ready").WithStartupTimeout(60*time.Second)),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = container.Terminate(ctx) })

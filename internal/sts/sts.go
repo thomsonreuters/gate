@@ -219,8 +219,7 @@ func (s *Service) logExchange(ctx context.Context, requestID string, req *Exchan
 		return
 	}
 
-	var exErr *ExchangeError
-	if errors.As(err, &exErr) {
+	if exErr, ok := errors.AsType[*ExchangeError](err); ok {
 		attrs := []slog.Attr{
 			slog.String("request_id", exErr.RequestID),
 			slog.String("repository", req.TargetRepository),

@@ -69,7 +69,7 @@ For organizations with high token issuance rates, GATE can distribute load acros
 
 ## Getting started
 
-GATE requires Go 1.26 or later for building from source, one or more GitHub Apps installed on the target organization, and an OIDC identity provider that your workloads can authenticate against.
+GATE requires Go 1.27 or later for building from source, one or more GitHub Apps installed on the target organization, and an OIDC identity provider that your workloads can authenticate against.
 
 Clone the repository and build the binary:
 

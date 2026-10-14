@@ -32,11 +32,11 @@ env:
   # Manifest list digests (buildx auto-resolves per platform)
   #
   # Golang Alpine (builder image)
-  # Image: public.ecr.aws/docker/library/golang:1.26.1-alpine
+  # Image: public.ecr.aws/docker/library/golang:1.27.2-alpine
   # Per-platform:
-  #   linux/amd64: sha256:d337ecb3075f0ec76d81652b3fa52af47c3eba6c8ba9f93b835752df7ce62946
-  #   linux/arm64: sha256:c500d8fac0707aa2a887d7e426530cfef09549c9c87ac0c2998543a89ce89d86
-  GOLANG_DIGEST: sha256:2389ebfa5b7f43eeafbd6be0c3700cc46690ef842ad962f6c5bd6be49ed82039
+  #   linux/amd64: sha256:3b15ba438c60ab8fabe5fee3b11025c0049e358b31feff384648f11fc8e335f8
+  #   linux/arm64: sha256:c2b8d9b05d9386fe1b01bab829eda3a05edb526c220e638d3c7a73671a290672
+  GOLANG_DIGEST: sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d
 
   # Distroless Static (runtime image)
   # Image: gcr.io/distroless/static-debian13:nonroot
