@@ -94,7 +94,7 @@ services:
       context: ..
       dockerfile: ./local/Dockerfile.dev
       args:
-        GOLANG_VERSION: ${GOLANG_VERSION:-1.26}
+        GOLANG_VERSION: ${GOLANG_VERSION:-1.27}
     container_name: gate-migrate
     working_dir: /app
     user: ${HOST_UID}:${HOST_GID}
@@ -139,7 +139,7 @@ services:
       context: ..
       dockerfile: ./local/Dockerfile.dev
       args:
-        GOLANG_VERSION: ${GOLANG_VERSION:-1.26}
+        GOLANG_VERSION: ${GOLANG_VERSION:-1.27}
     container_name: gate-server
     hostname: server
     working_dir: /app

@@ -74,9 +74,9 @@ VOLUMES_DIR := ./local/.volumes
 # podman manifest inspect <image:tag> | jq '.manifests[] | select(.platform.architecture == "amd64" or .platform.architecture == "arm64") | {arch: .platform.architecture, digest}'
 #
 # Golang Alpine (builder image)
-# Image: public.ecr.aws/docker/library/golang:1.26.1-alpine
-GOLANG_DIGEST_AMD64 := sha256:d337ecb3075f0ec76d81652b3fa52af47c3eba6c8ba9f93b835752df7ce62946
-GOLANG_DIGEST_ARM64 := sha256:c500d8fac0707aa2a887d7e426530cfef09549c9c87ac0c2998543a89ce89d86
+# Image: public.ecr.aws/docker/library/golang:1.27.2-alpine
+GOLANG_DIGEST_AMD64 := sha256:3b15ba438c60ab8fabe5fee3b11025c0049e358b31feff384648f11fc8e335f8
+GOLANG_DIGEST_ARM64 := sha256:c2b8d9b05d9386fe1b01bab829eda3a05edb526c220e638d3c7a73671a290672
 
 # Distroless Static (runtime image)
 # Image: gcr.io/distroless/static-debian13:nonroot
@@ -233,9 +233,9 @@ run: build
 .PHONY: lint
 lint:
 	@echo "Running linters..."
-	@golangci-lint version 2>/dev/null | grep -q "version $(GOLANGCI_LINT_VERSION:v%=%) " || { \
-		echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION)..."; \
-		go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
+	@golangci-lint version 2>/dev/null | grep -q "version $(GOLANGCI_LINT_VERSION:v%=%) built with go$(GO_VERSION) " || { \
+		echo "Installing golangci-lint $(GOLANGCI_LINT_VERSION) built with Go $(GO_VERSION)..."; \
+		GOTOOLCHAIN=go$(GO_VERSION) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION); \
 	}
 	golangci-lint run ./...
 

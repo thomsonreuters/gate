@@ -22,9 +22,9 @@ FROM public.ecr.aws/docker/library/golang@${GOLANG_DIGEST} AS builder
 
 
 RUN apk add --no-cache \
-    git=2.52.0-r0 \
-    ca-certificates=20251003-r0 \
-    file=5.46-r2
+    git=2.54.0-r0 \
+    ca-certificates=20260909-r0 \
+    file=5.47-r2
 
 WORKDIR /build
 
